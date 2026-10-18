@@ -18,6 +18,24 @@ Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The launcher prefers this p
 .\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8766
 ```
 
+## Windows executable
+
+Build the standalone, 64-bit Windows executable with the DirectML runtime:
+
+```powershell
+.\setup-gpu.ps1
+.\build-exe.ps1
+.\dist\StereoLab.exe
+```
+
+The executable runs the local web app; open [http://127.0.0.1:8765](http://127.0.0.1:8765).
+Depth models download on demand and are stored under `%LOCALAPPDATA%\StereoLab`;
+they are not bundled into the executable. Video conversion also needs FFmpeg. The
+app detects FFmpeg on `PATH`, `VIDEO3D_FFMPEG`, or an already installed local helper.
+The frozen app stores uploads and outputs under the same StereoLab local-data folder.
+One-file extraction can make the first launch slower, and Windows may show a warning
+for an unsigned PyInstaller executable.
+
 ## NVIDIA GTX GPU and CPU cooperation
 
 For Windows GPU acceleration, run `.\setup-gpu.ps1` once, then restart with `.\run.ps1`.

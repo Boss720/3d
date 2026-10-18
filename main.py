@@ -10,6 +10,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -45,12 +46,17 @@ from video_encoder import select_encoder_profile
 from video_pipeline import PipelineCancelled, run_pipeline
 
 
-ROOT = Path(__file__).resolve().parent
+FROZEN = bool(getattr(sys, "frozen", False))
+ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+DATA_ROOT = (
+    Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "StereoLab"
+    if FROZEN else ROOT
+)
 STATIC = ROOT / "static"
-RUNTIME = ROOT / ".runtime"
+RUNTIME = DATA_ROOT / ".runtime"
 UPLOADS = RUNTIME / "uploads"
 MODELS = RUNTIME / "models"
-OUTPUTS = ROOT / "outputs"
+OUTPUTS = DATA_ROOT / "outputs"
 CLIP_PROXIES = RUNTIME / "clip-proxies"
 MODEL_PATH = MODELS / "depth.onnx"
 
