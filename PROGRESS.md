@@ -176,3 +176,13 @@ All lanes are read-only and must not alter repository or installed files. No cod
 - Bounded spec frozen in `COMPATIBILITY_SPEC.md`; implementation ownership is coordinator-only, files to be set by the spec.
 - Wave review evidence: `git status --short` showed only the untracked `PROGRESS.md` before the spec was added; `git diff --stat` and `git diff` were empty. Both planning documents were then inspected in full. Worker changed-file reports were all empty.
 - Completion boundary: the compatible alternative targets standard media outputs. It does not reproduce Owl3D's neural model quality, downloader/account flow, live display/VR integrations, or proprietary formats and job protocol.
+
+## Model download repair (2026-10-18)
+
+Objective: fix model installs failing through the active local server. Coordinator owns `depth_engine.py`, `README.md`, and `PROGRESS.md` because the diagnosis and downloader behavior are sequential.
+
+Finding: `/api/models` reported Base and Large failed with WinError 10061. This process inherited HTTP(S)_PROXY=`http://127.0.0.1:9`; direct read-only HEAD to the pinned Small URL succeeded with HTTP 200 and matching manifest size/hash headers after removing proxy variables for that command.
+
+Acceptance: when an HTTPS loopback proxy refuses a connection, retry that pinned model request without the proxy, preserve normal configured proxies, keep existing hash/session acceptance checks, and show both causes if direct access also fails. Inspect source/docs and verify the actual install path where safe; avoid the 1.34 GB Large model and full suite for this focused repair.
+
+Outcome: added the loopback-refused direct retry and documented it. Through the actual downloader, Base transferred 388,917,010 bytes, passed its pinned SHA-256 (`dab40f67…26a7289`), loaded and completed CPU inference, and the restarted server reports Small and Base ready. `ast.parse` and `git diff --check` passed. The live server is running at `http://127.0.0.1:8766/`; Large and MiDaS remain available to install on demand. Full tests were not run for this focused fix.

@@ -88,7 +88,7 @@ Media stays on the local server. Only model installation contacts Hugging Face. 
 | Custom ONNX | Your file | Your model's license | OpenCV DNN CPU |
 | Visual approximation | None | App code | Image cues; **not neural AI depth** |
 
-Downloads use pinned upstream revisions and SHA-256 hashes, then load the graph and run CPU inference before installation is accepted. Rejected partial files are retained under `.runtime/models/_quarantine/` for inspection. Only one neural session is kept resident, and inference is serialized to bound memory use.
+Downloads honor configured HTTPS proxies. If a loopback proxy refuses the connection, StereoLab retries the pinned request directly over HTTPS; any installed file still must pass its pinned size, SHA-256, graph-load, and inference checks. Rejected partial files are retained under `.runtime/models/_quarantine/` for inspection. Only one neural session is kept resident, and inference is serialized to bound memory use.
 
 Named models use their own preprocessing. Depth Anything uses RGB/ImageNet normalization with aspect-preserving, multiple-of-14 sizing (nominal 518); MiDaS uses its 384 px/0.5 normalization. Both produce relative inverse depth: brighter means nearer. Custom models must accept a float32 RGB NCHW batch with square 256/384/518 input, ImageNet normalization, and return one depth map; not every ONNX graph matches this convention.
 

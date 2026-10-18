@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import hashlib
 import copy
+import errno
 import importlib
 import json
 import os
 import threading
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import cv2
 import numpy as np
@@ -220,6 +223,47 @@ class ModelManager:
                 digest.update(chunk)
         return digest.hexdigest()
 
+    @staticmethod
+    def _local_https_proxy() -> tuple[str, str] | None:
+        """Return a sanitized loopback proxy address, if HTTPS uses one."""
+        proxies = urllib.request.getproxies()
+        proxy = proxies.get("https") or proxies.get("all")
+        if not proxy:
+            return None
+        parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+        host = (parsed.hostname or "").lower()
+        if host not in {"localhost", "127.0.0.1", "::1"}:
+            return None
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        return host, f"{host}:{port}" if port is not None else host
+
+    @staticmethod
+    def _connection_refused(exc: urllib.error.URLError) -> bool:
+        reason = exc.reason
+        return (getattr(reason, "winerror", None) == 10061 or
+                getattr(reason, "errno", None) in {10061, errno.ECONNREFUSED})
+
+    @classmethod
+    def _open_model_url(cls, request: urllib.request.Request) -> Any:
+        try:
+            return urllib.request.urlopen(request, timeout=60)
+        except urllib.error.URLError as exc:
+            local_proxy = cls._local_https_proxy()
+            if local_proxy is None or not cls._connection_refused(exc):
+                raise
+            host, address = local_proxy
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            try:
+                return opener.open(request, timeout=60)
+            except Exception as direct_error:
+                raise RuntimeError(
+                    f"Local HTTPS proxy {address} refused the connection, and the direct "
+                    f"Hugging Face connection also failed: {direct_error}"
+                ) from direct_error
+
     def _download(self, model_id: str) -> None:
         spec = self._spec(model_id)
         destination = self._path(model_id)
@@ -233,7 +277,7 @@ class ModelManager:
             request = urllib.request.Request(url, headers={"User-Agent": "LocalStereoConverter/2"})
             total = 0
             digest = hashlib.sha256()
-            with urllib.request.urlopen(request, timeout=60) as response, partial.open("xb") as output:
+            with self._open_model_url(request) as response, partial.open("xb") as output:
                 length = response.headers.get("Content-Length")
                 if length is not None and int(length) != spec["size"]:
                     raise RuntimeError("Model download has an unexpected Content-Length.")
