@@ -26,3 +26,15 @@ main{max-width:1900px;margin-left:218px;padding:0 36px 0}.topbar{display:flex;al
 .queue-row>.row-actions{grid-column:2/-1;width:100%;min-width:0;justify-content:flex-start;align-self:start}
 .queue-row>.job-error{grid-column:2/-1;min-width:0}
 .queue-row .queue-workflow-status,.queue-row .queue-settings-detail,.queue-row .queue-source-detail{font-size:11px}
+.output-naming-controls{margin:14px 0;padding:13px;border:1px solid #44354f;border-radius:8px;background:#17131e}
+.output-naming-controls .field-label{margin-bottom:6px}
+.output-naming-controls input{display:block;width:100%;min-width:0;padding:10px 11px;border:1px solid #4b3b57;border-radius:7px;background:#100d16;color:#e2d6ef;font:inherit;font-size:13px}
+.output-naming-controls input[aria-invalid="true"]{border-color:#ffa8b8;box-shadow:0 0 0 1px #ffa8b844}
+.output-naming-controls .field-hint,.output-naming-controls .queue-workflow-status{margin:7px 0 0;line-height:1.6;overflow-wrap:anywhere}
+.queue-name-detail{display:block;margin-top:5px;color:#aa98b8;font-size:11px;line-height:1.55;overflow-wrap:anywhere}
+.queue-assist{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);align-items:center;gap:8px 12px;margin-top:12px}
+.queue-assist .outline-button{min-height:34px;padding:7px 11px;font-size:11px}
+.queue-assist small,.shortcut-help{color:#aa98b8;font-size:10px;line-height:1.55;margin:0;overflow-wrap:anywhere}
+.shortcut-help{margin-top:7px}
+.shortcut-help kbd{display:inline-block;padding:1px 4px;border:1px solid #51415f;border-radius:4px;color:#dfd0ed;background:#211a2b;font:inherit}
+@media(max-width:640px){.queue-assist{grid-template-columns:1fr}.queue-assist .outline-button{width:100%}}

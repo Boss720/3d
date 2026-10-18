@@ -32,6 +32,35 @@ const frontendContract = (() => {
   function retrySupported(runtime) {
     return capabilityV1(runtime) && runtime.capabilities.gpu_retry_supported === true;
   }
+  function effectiveQueueSettings(item, currentSettings) {
+    return validateSettings(item?.settingsFrozen ? item.settingsSnapshot : currentSettings);
+  }
+  function queueReadiness(pending, currentSettings, context = {}) {
+    const runtime = context.runtime || null, models = Array.isArray(context.models) ? context.models : [];
+    for (const item of pending || []) {
+      let settings;
+      try { settings = effectiveQueueSettings(item, currentSettings); }
+      catch (error) { return `${item?.name || "A ready file"}: its effective settings are invalid (${error.message})`; }
+      const mode = settings.depth_mode;
+      if (settings.execution_mode === "gpu") {
+        if (mode === "balanced" || mode === "precision") return `${item?.name || "A ready file"}: GPU-only execution is unavailable for this depth engine.`;
+        if (!runtime) return `${item?.name || "A ready file"}: checking NVIDIA GPU support…`;
+        if (!runtime.gpu_available) return `${item?.name || "A ready file"}: GPU was requested but no supported NVIDIA GPU is available. ${runtime.error || "Choose Auto, Hybrid, or CPU, or configure the GPU runtime."}`;
+        if (mode === "depth-anything-v2-large" && !capabilityV1(runtime)) return `${item?.name || "A ready file"}: ${gpuPolicy(runtime, selectedGpuAdapter(runtime), mode).message || "This server does not report GPU capability schema v1. Upgrade StereoLab to enable Large GPU inference safely."}`;
+      }
+      if (mode === "balanced") continue;
+      if (mode === "precision") {
+        if (!context.customModelAvailable) return `${item?.name || "A ready file"}: choose a compatible ONNX model to use Custom mode.`;
+        continue;
+      }
+      if (runtime && !runtime.available) return `${item?.name || "A ready file"}: install ONNX Runtime to use neural depth models. See Local runtime below.`;
+      const model = models.find((candidate) => candidate.id === mode);
+      if (!model) return `${item?.name || "A ready file"}: ${context.catalogError ? `model catalog unavailable: ${context.catalogError}` : "checking the selected model…"}`;
+      if (model.state === "downloading") return `${item?.name || "A ready file"}: ${model.name} is downloading. Wait for installation to finish.`;
+      if (model.state !== "ready") return `${item?.name || "A ready file"}: install ${model.name} to use this depth engine.`;
+    }
+    return "";
+  }
   async function retryGpu(request, refreshStatus) {
     const result = await request("/api/runtime/gpu/reset", { method: "POST" });
     if (result?.reset !== true) throw new Error("The server did not confirm the GPU retry reset.");
@@ -116,6 +145,53 @@ const frontendContract = (() => {
   function isOrdinaryExportJob(job) {
     return Boolean(job && (job.purpose == null || job.purpose === "export"));
   }
+  function completionNotificationStatus(supported, permission, optedIn) {
+    if (!supported) return { enabled: false, canEnable: false, message: "Browser notifications are unavailable in this browser." };
+    if (permission === "denied") return { enabled: false, canEnable: false, message: "Notifications are blocked for this site. Allow them in browser settings, then return here to enable completion notices." };
+    if (permission !== "granted") return { enabled: false, canEnable: true, message: "Completion notifications are off. Enable them here to request browser permission." };
+    if (optedIn) return { enabled: true, canEnable: true, message: "Completion notifications are enabled for this tab only." };
+    return { enabled: false, canEnable: true, message: "Browser permission is available. Completion notifications are off until enabled here." };
+  }
+  function observeCompletionNotice(tracker, job, previousState = "") {
+    const current = tracker && typeof tracker === "object" ? tracker : { trackedIds: [], activeIds: [], completedIds: [] };
+    let trackedIds = Array.isArray(current.trackedIds) ? [...current.trackedIds] : [];
+    let activeIds = Array.isArray(current.activeIds) ? [...current.activeIds] : [];
+    let completedIds = Array.isArray(current.completedIds) ? [...current.completedIds] : [];
+    if (!isOrdinaryExportJob(job) || typeof job.id !== "string" || !job.id.trim()) return { tracker: { trackedIds, activeIds, completedIds }, notify: false };
+    const id = job.id, activeStates = ["uploading", "queued", "processing"];
+    if (completedIds.includes(id)) return { tracker: { trackedIds, activeIds, completedIds }, notify: false };
+    const remember = () => {
+      if (!trackedIds.includes(id)) trackedIds.push(id);
+      while (trackedIds.length > 512) {
+        const removed = trackedIds.shift();
+        activeIds = activeIds.filter((value) => value !== removed);
+        completedIds = completedIds.filter((value) => value !== removed);
+      }
+    };
+    if (activeStates.includes(job.state)) {
+      remember();
+      if (!activeIds.includes(id)) activeIds.push(id);
+      return { tracker: { trackedIds, activeIds, completedIds }, notify: false };
+    }
+    if (job.state === "completed") {
+      const qualified = activeIds.includes(id) || activeStates.includes(previousState);
+      activeIds = activeIds.filter((value) => value !== id);
+      if (!qualified) return { tracker: { trackedIds, activeIds, completedIds }, notify: false };
+      remember();
+      completedIds.push(id);
+      return { tracker: { trackedIds, activeIds, completedIds }, notify: true };
+    }
+    if (["failed", "canceled"].includes(job.state)) activeIds = activeIds.filter((value) => value !== id);
+    return { tracker: { trackedIds, activeIds, completedIds }, notify: false };
+  }
+  function keyboardShortcutAction(event = {}) {
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat || event.defaultPrevented || event.isComposing || event.modalOpen) return null;
+    const target = event.target || {}, tag = String(target.tagName || "").toLowerCase();
+    if (["input", "textarea", "select"].includes(tag) || target.isContentEditable) return null;
+    if (event.code === "KeyP") return event.previewEnabled ? "preview" : null;
+    if (event.code === "Enter") return event.submitEnabled ? "submit" : null;
+    return null;
+  }
   function clipContextMatches(before, after) {
     return Boolean(before && after && ["sourceId", "settings", "startSeconds", "durationSeconds"].every((key) => before[key] === after[key]));
   }
@@ -131,6 +207,50 @@ const frontendContract = (() => {
   function queueCapabilities(status) {
     const caps = status?.queue_capabilities;
     return caps?.schema_version === 1 && caps.reorder_queued_exports === true && caps.edit_queued_exports === true && caps.remove_queued_exports === true && caps.settings_snapshot === true ? caps : null;
+  }
+  const defaultOutputNameTemplate = "{name}_{layout}", outputNameTemplateFields = ["name", "layout", "model", "date"], outputNameTemplateMaxLength = 120;
+  function outputNamingCapability(status) {
+    const caps = status?.naming_capabilities;
+    if (!caps || caps.schema_version !== 1 || caps.supported !== true || caps.max_template_length !== outputNameTemplateMaxLength || caps.unique_job_id_suffix !== true ||
+        !Array.isArray(caps.fields) || caps.fields.length !== outputNameTemplateFields.length || new Set(caps.fields).size !== outputNameTemplateFields.length ||
+        !outputNameTemplateFields.every((field) => caps.fields.includes(field))) return null;
+    return caps;
+  }
+  function validateOutputNameTemplate(value, maxLength=outputNameTemplateMaxLength) {
+    if (typeof value !== "string" || !value.trim()) throw new Error("Output name template must not be empty.");
+    if (!Number.isSafeInteger(maxLength) || maxLength < 1 || maxLength > outputNameTemplateMaxLength || Array.from(value).length > maxLength) throw new Error(`Output name template must be ${outputNameTemplateMaxLength} characters or fewer.`);
+    const invalidUnicode = /[\p{Cc}\p{Cf}\p{Cs}]/u;
+    for(const char of value)if(invalidUnicode.test(char))throw new Error("Output name template contains invalid Unicode.");
+    const invalidLiteral = '<>:"/\\\\|?*';
+    for (let index = 0; index < value.length; index++) {
+      const char = value[index], code = value.charCodeAt(index);
+      if (code < 32 || code === 127 || invalidLiteral.includes(char)) throw new Error("Output name template contains a character that is not allowed in a filename.");
+      if (char === "}") throw new Error("Output name template contains an unmatched closing brace.");
+      if (char === "{") {
+        const close = value.indexOf("}", index + 1), token = close < 0 ? "" : value.slice(index + 1, close);
+        if (!outputNameTemplateFields.includes(token)) throw new Error("Output name template contains an unmatched or unsupported token.");
+        index = close;
+      }
+    }
+    return value;
+  }
+  function validateOutputBasename(value, label) {
+    if(typeof value!=="string"||!value.trim())throw new Error(`The server did not report a valid ${label}.`);
+    const invalidLiteral='<>:"/\\\\|?*';
+    const invalidUnicode=/[\p{Cc}\p{Cf}\p{Cs}]/u;
+    for(const char of value)if(invalidUnicode.test(char)||invalidLiteral.includes(char))throw new Error(`The server reported an unsafe ${label}.`);
+    return value;
+  }
+  function validateQueueJobNaming(job) {
+    if (!job || typeof job !== "object" || Array.isArray(job)) throw new Error("The queue naming snapshot must be an object.");
+    const hasNaming = job.naming_schema_version != null || job.output_name_template != null || job.planned_output_name != null || job.output_name != null;
+    if (!hasNaming) return null;
+    if (job.naming_schema_version !== 1) throw new Error("This server does not provide output naming schema v1.");
+    const outputNameTemplate = validateOutputNameTemplate(job.output_name_template);
+    const plannedOutputName=validateOutputBasename(job.planned_output_name,"planned output name");
+    const outputName=job.output_name==null?null:validateOutputBasename(job.output_name,"actual output name");
+    if (job.state === "completed" && job.output_name == null) throw new Error("The completed job did not report its actual output name.");
+    return { outputNameTemplate, plannedOutputName, outputName };
   }
   function validateQueueJobSnapshot(job) {
     if (!job || typeof job !== "object" || Array.isArray(job) || job.settings_schema_version !== 1) throw new Error("This server does not provide queue settings schema v1.");
@@ -157,9 +277,32 @@ const frontendContract = (() => {
     [ids[index], ids[neighbor]] = [ids[neighbor], ids[index]];
     return ids;
   }
-  function makeReadyQueueCopy(item, settings) {
+  function makeReadyQueueCopy(item, settings, outputNameTemplate=defaultOutputNameTemplate) {
     if (!item || !item.file) throw new Error("The original source file is unavailable. Reselect it before retrying or duplicating.");
-    return { file: item.file, name: item.name, size: item.size, mediaType: item.mediaType, state: "ready", progress: 0, error: null, message: "Ready to submit as a new job", settingsSnapshot: validateSettings(settings), settingsFrozen: true };
+    const outputNameTemplateSnapshot=validateOutputNameTemplate(outputNameTemplate);
+    return { file: item.file, name: item.name, size: item.size, mediaType: item.mediaType, state: "ready", progress: 0, error: null, message: "Ready to submit as a new job", settingsSnapshot: validateSettings(settings), settingsFrozen: true, outputNameTemplateSnapshot, namingFrozen: true };
+  }
+  function freezeReadyQueueItem(item, settings, outputNameTemplate=defaultOutputNameTemplate) {
+    return { ...item, settingsSnapshot: validateSettings(settings), settingsFrozen: true, outputNameTemplateSnapshot: validateOutputNameTemplate(outputNameTemplate), namingFrozen: true };
+  }
+  function outputNameTemplateForSubmit(item, currentTemplate=defaultOutputNameTemplate) {
+    return validateOutputNameTemplate(item?.namingFrozen && item.outputNameTemplateSnapshot != null ? item.outputNameTemplateSnapshot : currentTemplate);
+  }
+  function outputNameTemplateForSubmission(capability, item, currentTemplate=defaultOutputNameTemplate) {
+    return capability ? validateOutputNameTemplate(outputNameTemplateForSubmit(item,currentTemplate),capability.max_template_length) : null;
+  }
+  function canSnapshotOutputNameTemplate(capability, currentTemplate=defaultOutputNameTemplate) {
+    if(!capability)return true;
+    try{validateOutputNameTemplate(currentTemplate,capability.max_template_length);return true;}catch{return false;}
+  }
+  function outputNameTemplateForQueueCopy(item, kind, currentTemplate=defaultOutputNameTemplate) {
+    if (kind === "retry") return validateOutputNameTemplate(item?.outputNameTemplateSnapshot ?? defaultOutputNameTemplate);
+    if (kind === "duplicate") return validateOutputNameTemplate(currentTemplate);
+    throw new Error("Queue copy kind must be retry or duplicate.");
+  }
+  function queuedNameUpdateRequest(jobId, outputNameTemplate) {
+    if (typeof jobId !== "string" || !jobId.trim()) throw new Error("A queued export job ID is required.");
+    return { url: `/api/jobs/${encodeURIComponent(jobId)}/naming`, options: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ output_name_template: validateOutputNameTemplate(outputNameTemplate) }) } };
   }
   function queuePhaseLabel(phase) { return typeof phase === "string" && phase.trim() && phase !== "queued" ? `Phase: ${phase.replace(/[_-]+/g," ")}` : ""; }
   function previewClipDetails(job) {
@@ -362,7 +505,7 @@ const frontendContract = (() => {
     const png = (value) => typeof value === "string" && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value);
     return Boolean(result && png(result.source) && png(result.depth));
   }
-  return Object.freeze({ capabilityV1, gpuPolicy, selectedGpuAdapter, retrySupported, retryGpu, fullStillEligibility, validatePreviewResponse, previewDimensionDetails, processedClipCapability, validProcessedClipDuration, processedClipUnavailableMessage, processedClipErrorAfterPoll, validatePreviewClipJob, isOrdinaryExportJob, clipContextMatches, processedClipResponseAction, processedClipQuarantineAfterPoll, queueCapabilities, validateQueueJobSnapshot, moveReadyQueueItem, moveQueuedExportIds, makeReadyQueueCopy, queuePhaseLabel, previewClipDetails, previewExecutionDetails, preflightDetails, jobEtaLabel, performancePreset, validateSettings, validateUserPreset, exportUserPreset, hasUnsavedSettings, validateCalibrationReport, calibrationApplicable, calibrationDetails, calibrationStatusLabel, calibrationContextMatches, zoomPanGeometry, compareSplitPercent, sourceDepthCompareAvailable });
+  return Object.freeze({ capabilityV1, gpuPolicy, selectedGpuAdapter, retrySupported, retryGpu, effectiveQueueSettings, queueReadiness, fullStillEligibility, validatePreviewResponse, previewDimensionDetails, processedClipCapability, validProcessedClipDuration, processedClipUnavailableMessage, processedClipErrorAfterPoll, validatePreviewClipJob, isOrdinaryExportJob, completionNotificationStatus, observeCompletionNotice, keyboardShortcutAction, clipContextMatches, processedClipResponseAction, processedClipQuarantineAfterPoll, queueCapabilities, outputNamingCapability, validateOutputNameTemplate, validateOutputBasename, validateQueueJobNaming, validateQueueJobSnapshot, moveReadyQueueItem, moveQueuedExportIds, makeReadyQueueCopy, freezeReadyQueueItem, outputNameTemplateForSubmit, outputNameTemplateForSubmission, canSnapshotOutputNameTemplate, outputNameTemplateForQueueCopy, queuedNameUpdateRequest, queuePhaseLabel, previewClipDetails, previewExecutionDetails, preflightDetails, jobEtaLabel, performancePreset, validateSettings, validateUserPreset, exportUserPreset, hasUnsavedSettings, validateCalibrationReport, calibrationApplicable, calibrationDetails, calibrationStatusLabel, calibrationContextMatches, zoomPanGeometry, compareSplitPercent, sourceDepthCompareAvailable });
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = frontendContract;
 if (typeof window !== "undefined") window.StereoLabFrontendContract = frontendContract;
@@ -370,7 +513,7 @@ if (typeof window !== "undefined") window.StereoLabFrontendContract = frontendCo
 if (typeof document !== "undefined") (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const ids = ["mediaInput","dropZone","browseButton","sourceVideo","sourceImage","processedImage","previewEmpty","previewStage","sourceName","previewState","generatePreview","layoutSelect","formatHint","previewModeLabel","presetSelect","depthMode","depthNote","installSelected","modelRow","modelInput","modelButton","modelState","modelSizeRow","modelSizeLabel","modelSize","midasSizeNote","strength","strengthValue","convergence","convergenceValue","temporalSmoothing","smoothingValue","edgeRefinement","invertDepth","resolution","quality","convertButton","convertCount","convertHint","queueRows","queueEmpty","queueCount","queueHeadingCount","clearQueueButton","applySettingsToReady","queueWorkflowStatus","enginePill","engineText","toolDescription","toolPath","runtimeDescription","runtimeCommand","modelCards","refreshModels","toast","helpButton","aboutDialog","aboutDone"];
+  const ids = ["mediaInput","dropZone","browseButton","sourceVideo","sourceImage","processedImage","previewEmpty","previewStage","sourceName","previewState","generatePreview","layoutSelect","formatHint","previewModeLabel","presetSelect","depthMode","depthNote","installSelected","modelRow","modelInput","modelButton","modelState","modelSizeRow","modelSizeLabel","modelSize","midasSizeNote","strength","strengthValue","convergence","convergenceValue","temporalSmoothing","smoothingValue","edgeRefinement","invertDepth","resolution","quality","convertButton","convertCount","convertHint","queueRows","queueEmpty","queueCount","queueHeadingCount","clearQueueButton","applySettingsToReady","queueWorkflowStatus","outputNamingControls","outputNameTemplate","outputNameTemplateHelp","outputNamingStatus","enginePill","engineText","toolDescription","toolPath","runtimeDescription","runtimeCommand","modelCards","refreshModels","toast","helpButton","aboutDialog","aboutDone","completionNotifications","completionNotificationStatus","shortcutHelp"];
   ids.push("executionMode", "executionNote", "previewExecution", "retryGpu", "performancePreset", "performancePresetStatus", "performancePresetSummary", "resetPerformancePreset", "exportPreset", "importPresetButton", "importPresetFile", "calibrationBudget", "calibrateInput", "calibrationStatus", "calibrationReport", "calibrationSummary", "calibrationCandidates", "calibrationScope", "calibrationLimitations", "calibrationStorageWarning", "applyCalibration", "tabCompare", "previewMedia", "sourceDepthCompare", "compareSource", "compareDepth", "compareDivider", "compareControls", "compareSlider", "compareValue", "compareResolution", "zoomIn", "zoomOut", "zoomLabel", "resetZoom", "previewDetail", "previewDetailHint", "processedClipCapability", "processedClipDuration", "generateProcessedClip", "cancelProcessedClip", "processedClipStatus", "processedClipVideo");
   const ui = Object.fromEntries(ids.map((id) => [id, $(id)]));
   const imageExtensions = new Set(["jpg","jpeg","png","webp"]);
@@ -389,7 +532,10 @@ if (typeof document !== "undefined") (() => {
   let previewRevision = 0, resultRevision = -1, previewBusy = false, sourceError = "", previewError = "";
   let zoomState = { zoom: 1, panX: 0, panY: 0 }, panPointer = null, compareSplit = 50;
   let models = [], runtime = null, status = null, statusLoadError = "", customModelAvailable = false, catalogError = "";
+  let namingCapability = null, currentOutputNameTemplate = "{name}_{layout}";
   let modelTimer = null, jobTimer = null, jobsBusy = false, modelsBusy = false, submitting = false, queueMutationBusy = false, queueWorkflowMessage = "", toastTimer = null;
+  let completionNoticesOptedIn = false, completionNotificationBusy = false;
+  let completionNoticeTracker = { trackedIds: [], activeIds: [], completedIds: [] };
   let previewClip = { generation: 0, requestPending: false, context: null, job: null, quarantine: null, stale: false, cancelWhenReturned: false, cancelBusy: false, timer: null, error: "", errorKind: "" };
   const hiddenJobs = new Set();
   try { JSON.parse(sessionStorage.getItem("stereolab.hiddenJobs") || "[]").forEach((id) => hiddenJobs.add(id)); } catch { /* Session storage may be disabled. */ }
@@ -412,6 +558,46 @@ if (typeof document !== "undefined") (() => {
     if (hours) return `${hours}h ${minutes}m`;
     if (minutes) return secs ? `${minutes}m ${secs}s` : `${minutes}m`;
     return `${secs}s`;
+  }
+  function updateCompletionNotificationControls() {
+    try {
+      const supported = typeof window.Notification === "function";
+      const permission = supported ? window.Notification.permission : "unsupported";
+      if (permission !== "granted") completionNoticesOptedIn = false;
+      const state = frontendContract.completionNotificationStatus(supported, permission, completionNoticesOptedIn);
+      ui.completionNotifications.disabled = !state.canEnable || completionNotificationBusy;
+      ui.completionNotifications.textContent = state.enabled ? "Disable completion notifications" : permission === "denied" ? "Notifications blocked" : "Enable completion notifications";
+      ui.completionNotificationStatus.textContent = state.message;
+    } catch {
+      completionNoticesOptedIn = false;
+      ui.completionNotifications.disabled = true;
+      ui.completionNotifications.textContent = "Notifications unavailable";
+      ui.completionNotificationStatus.textContent = "Browser notification status could not be checked. Queue processing continues normally.";
+    }
+  }
+  async function toggleCompletionNotifications() {
+    if (completionNoticesOptedIn) { completionNoticesOptedIn = false; updateCompletionNotificationControls(); return; }
+    if (typeof window.Notification !== "function" || window.Notification.permission === "denied") { updateCompletionNotificationControls(); return; }
+    completionNotificationBusy = true; updateCompletionNotificationControls();
+    let permission = window.Notification.permission, requestError = "";
+    try { if (permission !== "granted") permission = await window.Notification.requestPermission(); }
+    catch { requestError = "Could not request notification permission. Check browser settings and try again."; }
+    completionNoticesOptedIn = permission === "granted";
+    completionNotificationBusy = false; updateCompletionNotificationControls();
+    if (requestError) ui.completionNotificationStatus.textContent = requestError;
+  }
+  function showCompletionNoticeBatch(sourceNames) {
+    if (!sourceNames.length) return;
+    try {
+      updateCompletionNotificationControls();
+      if (!completionNoticesOptedIn || typeof window.Notification !== "function" || window.Notification.permission !== "granted") return;
+      const body = sourceNames.length === 1 ? String(sourceNames[0] || "Export").split(/[\\/]/).pop().slice(0, 120) : `${sourceNames.length} exports completed`;
+      new window.Notification("StereoLab export ready", { body });
+    } catch {
+      completionNoticesOptedIn = false;
+      updateCompletionNotificationControls();
+      ui.completionNotificationStatus.textContent = "A completion notification could not be shown. Check browser notification settings, then enable notices again.";
+    }
   }
   function metricNumber(value) {
     if (value == null || value === "") return null;
@@ -483,6 +669,11 @@ if (typeof document !== "undefined") (() => {
     if (model.state === "downloading") return `${model.name} is downloading. Wait for installation to finish.`;
     if (model.state !== "ready") return `Install ${model.name} to use this depth engine.`;
     return "";
+  }
+  function queueNamingBlock(pending=items.filter((item)=>!item.jobId&&item.state==="ready")){
+    if(!namingCapability||!pending.length)return "";
+    try{for(const item of pending)frontendContract.outputNameTemplateForSubmission(namingCapability,item,currentOutputNameTemplate);return "";}
+    catch(error){return `Fix the output name template before uploading: ${error.message}`;}
   }
   function sourceReady() { return previewFile && !sourceError && (isImage(previewFile) ? ui.sourceImage.complete && ui.sourceImage.naturalWidth > 0 : ui.sourceVideo.readyState >= 2); }
   function previewClipContext(){return {sourceId:selectedUid,settings:JSON.stringify(getSettings()),startSeconds:ui.sourceVideo.currentTime,durationSeconds:Number(ui.processedClipDuration.value)};}
@@ -684,13 +875,13 @@ if (typeof document !== "undefined") (() => {
     return items.map((item,index)=>({item,index})).sort((a,b)=>rank(a.item)-rank(b.item)||(rank(a.item)===1?(a.item.queuePosition??Number.MAX_SAFE_INTEGER)-(b.item.queuePosition??Number.MAX_SAFE_INTEGER):0)||a.index-b.index).map(({item})=>item);
   }
   function focusQueueItem(uid,key){setTimeout(()=>{const row=[...ui.queueRows.querySelectorAll(".queue-row")].find((node)=>node.dataset.itemUid===String(uid));const actions=row?[...row.querySelectorAll("[data-action-key]")]:[];const target=(row&&(actions.find((node)=>node.dataset.actionKey===key&&!node.disabled)||actions.find((node)=>!node.disabled)||row.querySelector(".file-name")))||ui.queueRows.querySelector(".file-name")||(!ui.applySettingsToReady.disabled?ui.applySettingsToReady:ui.clearQueueButton);target?.focus();},0);}
-  function freezeReadyItem(item, settings=currentSettingsForPreset()){item.settingsSnapshot=frontendContract.validateSettings(settings);item.settingsFrozen=true;item.message="Ready with frozen settings";}
+  function freezeReadyItem(item, settings=currentSettingsForPreset()){Object.assign(item,frontendContract.freezeReadyQueueItem(item,settings,namingCapability?currentOutputNameTemplate:"{name}_{layout}"));item.message=namingCapability?"Ready with frozen settings and name template":"Ready with frozen settings";}
   function moveLocalReady(item,direction){const key=`move-ready-${item.uid}-${direction}`;items=frontendContract.moveReadyQueueItem(items,item.uid,direction);queueWorkflowMessage=`Moved ${item.name} ${direction<0?"earlier":"later"} in the local ready-file order.`;updateQueue(item.uid,key);}
-  function applySettingsToReady(){const ready=items.filter((item)=>!item.jobId&&item.state==="ready");if(!ready.length)return;const snapshot=currentSettingsForPreset();ready.forEach((item)=>freezeReadyItem(item,snapshot));queueWorkflowMessage=`Applied and froze the current settings for ${ready.length} ready file${ready.length===1?"":"s"}.`;updateQueue();}
-  function useJobSettings(item){if(!item.settingsSnapshot){toast(item.settingsSnapshotError||"A valid settings snapshot is not available from this server.",true);return;}assignSettings(item.settingsSnapshot);performanceBaseline={...item.settingsSnapshot};importedPresetBaseline=true;ui.performancePreset.value="custom";ui.presetSelect.value="custom";updateSettings();renderModels();toast(`Loaded settings from ${item.name}. No job was started.`);updateQueue(item.uid,`use-snapshot-${item.uid||item.jobId}`);}
-  function addQueueCopy(item,settings,kind){try{const copy=frontendContract.makeReadyQueueCopy(item,settings);copy.uid=crypto.randomUUID();items.splice(items.indexOf(item)+1,0,copy);selectedUid=copy.uid;selectItem(copy);queueWorkflowMessage=`${kind} added as a new ready file. Review it and choose Convert queue when ready.`;updateQueue(copy.uid,`use-current-${copy.uid}`);}catch(error){toast(error.message,true);}}
-  function retryQueueItem(item){if(!item.file){toast("The original source is unavailable in this browser tab. Reselect the file to retry.",true);return;}addQueueCopy(item,item.settingsSnapshot||currentSettingsForPreset(),"Retry");}
-  function duplicateQueueItem(item){if(!item.file){toast("The original source is unavailable in this browser tab. Reselect the file to duplicate it.",true);return;}addQueueCopy(item,currentSettingsForPreset(),"Duplicate");}
+  function applySettingsToReady(){const ready=items.filter((item)=>!item.jobId&&item.state==="ready");if(!ready.length)return;if(!frontendContract.canSnapshotOutputNameTemplate(namingCapability,currentOutputNameTemplate)){toast("Fix the output name template before freezing ready files.",true);ui.outputNameTemplate.focus();return;}const snapshot=currentSettingsForPreset();ready.forEach((item)=>freezeReadyItem(item,snapshot));queueWorkflowMessage=namingCapability?`Applied and froze the current settings and name template for ${ready.length} ready file${ready.length===1?"":"s"}.`:`Applied and froze the current settings for ${ready.length} ready file${ready.length===1?"":"s"}.`;updateQueue();}
+  function useJobSettings(item){if(!item.settingsSnapshot){toast(item.settingsSnapshotError||"A valid settings snapshot is not available from this server.",true);return;}let outputTemplate=null;if(namingCapability){if(!item.outputNameTemplateSnapshot){toast(item.namingSnapshotError||"A valid output name template snapshot is not available from this server.",true);return;}try{outputTemplate=frontendContract.validateOutputNameTemplate(item.outputNameTemplateSnapshot,namingCapability.max_template_length);}catch(error){toast(error.message,true);return;}}assignSettings(item.settingsSnapshot);if(outputTemplate){currentOutputNameTemplate=outputTemplate;ui.outputNameTemplate.value=outputTemplate;ui.outputNamingStatus.textContent=`Loaded name template from ${item.name}. No job was started.`;}performanceBaseline={...item.settingsSnapshot};importedPresetBaseline=true;ui.performancePreset.value="custom";ui.presetSelect.value="custom";updateSettings();renderModels();toast(`Loaded settings from ${item.name}. No job was started.`);updateQueue(item.uid,`use-snapshot-${item.uid||item.jobId}`);}
+  function addQueueCopy(item,settings,kind,outputNameTemplate=currentOutputNameTemplate){try{const copy=frontendContract.makeReadyQueueCopy(item,settings,outputNameTemplate);copy.uid=crypto.randomUUID();items.splice(items.indexOf(item)+1,0,copy);selectedUid=copy.uid;selectItem(copy);queueWorkflowMessage=`${kind} added as a new ready file. Review it and choose Convert queue when ready.`;updateQueue(copy.uid,`use-current-${copy.uid}`);}catch(error){toast(error.message,true);}}
+  function retryQueueItem(item){if(!item.file){toast("The original source is unavailable in this browser tab. Reselect the file to retry.",true);return;}addQueueCopy(item,item.settingsSnapshot||currentSettingsForPreset(),"Retry",frontendContract.outputNameTemplateForQueueCopy(item,"retry",currentOutputNameTemplate));}
+  function duplicateQueueItem(item){if(!item.file){toast("The original source is unavailable in this browser tab. Reselect the file to duplicate it.",true);return;}addQueueCopy(item,currentSettingsForPreset(),"Duplicate",frontendContract.outputNameTemplateForQueueCopy(item,"duplicate",namingCapability?currentOutputNameTemplate:"{name}_{layout}"));}
   function eligibleQueuedExports(){return items.filter((item)=>item.jobId&&(item.purpose==null||item.purpose==="export")&&item.state==="queued"&&Number.isSafeInteger(item.queuePosition)&&item.queuePosition>0).map((item)=>({id:item.jobId,purpose:item.purpose,state:item.state,queue_position:item.queuePosition}));}
   async function queueMutationFailed(error,description){
     if(error.status===409){try{await refreshQueueFromServer();queueWorkflowMessage=`${description} was not applied because work started or the queue changed. The queue was refreshed; review it and try again.`;}catch(refreshError){queueWorkflowMessage=`${description} was not applied because work started or the queue changed. Queue refresh failed: ${refreshError.message}`;}}
@@ -712,6 +903,14 @@ if (typeof document !== "undefined") (() => {
     }catch(error){await queueMutationFailed(error,"Queued settings update");}
     finally{queueMutationBusy=false;updateQueue(item.uid,focusKey);}
   }
+  async function updateQueuedName(item,focusKey){
+    if(!namingCapability||queueMutationBusy)return;
+    let output_name_template;try{output_name_template=frontendContract.validateOutputNameTemplate(currentOutputNameTemplate,namingCapability.max_template_length);}catch(error){ui.outputNamingStatus.textContent=error.message;ui.outputNameTemplate.setAttribute("aria-invalid","true");ui.outputNameTemplate.focus();toast(error.message,true);return;}
+    queueMutationBusy=true;queueWorkflowMessage=`Updating the output name for ${item.name}…`;updateQueue(item.uid,focusKey);
+    try{const mutation=frontendContract.queuedNameUpdateRequest(item.jobId,output_name_template),job=await request(mutation.url,mutation.options);mergeJob(item,job);queueWorkflowMessage=`Updated the queued output name for ${item.name}.`;}
+    catch(error){await queueMutationFailed(error,"Queued output name update");}
+    finally{queueMutationBusy=false;updateQueue(item.uid,focusKey);}
+  }
   async function removeQueuedItem(item,focusKey){
     if(!frontendContract.queueCapabilities(status)||queueMutationBusy)return;
     queueMutationBusy=true;queueWorkflowMessage=`Removing ${item.name} from the server queue…`;updateQueue(item.uid,focusKey);
@@ -721,12 +920,15 @@ if (typeof document !== "undefined") (() => {
   }
   function updateQueue(focusUid=null,focusKey=null) {
     if(!focusUid&&ui.queueRows.contains(document.activeElement)){const active=document.activeElement,row=active.closest(".queue-row");if(row){focusUid=row.dataset.itemUid;focusKey=active.dataset.actionKey||null;}}
-    const pending=items.filter((x)=>!x.jobId&&x.state==="ready"),block=readiness(),caps=frontendContract.queueCapabilities(status);
+    const pending=items.filter((x)=>!x.jobId&&x.state==="ready"),block=frontendContract.queueReadiness(pending,currentSettingsForPreset(),{runtime,models,customModelAvailable,catalogError}),namingBlock=queueNamingBlock(pending),canFreezeName=frontendContract.canSnapshotOutputNameTemplate(namingCapability,currentOutputNameTemplate),caps=frontendContract.queueCapabilities(status);
     const videoBlocked=status&&!status.ffmpeg_found&&pending.some((x)=>x.mediaType==="video");
+    ui.outputNamingControls.hidden=!namingCapability;
+    if(namingCapability){ui.outputNameTemplate.maxLength=namingCapability.max_template_length*2;try{frontendContract.validateOutputNameTemplate(currentOutputNameTemplate,namingCapability.max_template_length);ui.outputNameTemplate.removeAttribute("aria-invalid");ui.outputNamingStatus.textContent="Ready to name new exports. The unique job ID and file extension are added automatically.";}catch(error){ui.outputNameTemplate.setAttribute("aria-invalid","true");ui.outputNamingStatus.textContent=error.message;}}
     ui.queueCount.textContent=String(items.length);ui.queueHeadingCount.textContent=`(${items.length})`;ui.convertCount.textContent=String(pending.length);ui.queueEmpty.hidden=items.length>0;
-    ui.convertButton.disabled=!pending.length||submitting||Boolean(block)||Boolean(videoBlocked);ui.convertButton.firstElementChild.textContent=submitting?"Adding to local queue…":"✦ Convert queue";
-    ui.convertHint.textContent=block||(videoBlocked?"FFmpeg is needed for the videos in your queue.":pending.length?`${pending.length} file${pending.length===1?"":"s"} ready. Unfrozen files use the visible settings when submitted.`:"Add media to start a conversion.");
-    ui.applySettingsToReady.disabled=!pending.length;ui.queueWorkflowStatus.textContent=queueWorkflowMessage||(caps?"Ready files use the visible settings at submission unless frozen. Server queue edits apply only to pending exports; clip slots stay in place.":"Ready files use the visible settings at submission unless frozen. This server does not advertise queue-edit capability.");
+    ui.convertButton.disabled=!pending.length||submitting||Boolean(block)||Boolean(namingBlock)||Boolean(videoBlocked);ui.convertButton.firstElementChild.textContent=submitting?"Adding to local queue…":"✦ Convert queue";
+    ui.convertHint.textContent=block||namingBlock||(videoBlocked?"FFmpeg is needed for the videos in your queue.":pending.length?`${pending.length} file${pending.length===1?"":"s"} ready. Unfrozen files use visible settings${namingCapability?" and the current name template":""} when submitted.`:"Add media to start a conversion.");
+    ui.applySettingsToReady.textContent=namingCapability?"Apply settings + name to ready files":"Apply settings to ready files";
+    ui.applySettingsToReady.disabled=!pending.length||!canFreezeName;ui.queueWorkflowStatus.textContent=queueWorkflowMessage||(namingCapability?(caps?"Ready files use visible settings and the current name template at submit unless frozen. Server queue edits apply only to pending exports; clip slots stay in place.":"Ready files use visible settings and the current name template at submit unless frozen."):(caps?"Ready files use visible settings at submit unless frozen. Server queue edits apply only to pending exports; clip slots stay in place.":"Ready files use visible settings at submit unless frozen."));
     ui.queueRows.replaceChildren();
     const queuedExports=eligibleQueuedExports(),displayItems=queueDisplayItems();
     for(const item of displayItems){
@@ -740,6 +942,13 @@ if (typeof document !== "undefined") (() => {
       if(item.settingsSnapshot)copy.append(el("small","queue-settings-detail",`${item.jobId?"Server snapshot":item.settingsFrozen?"Frozen settings":"Unfrozen · uses current settings at submit"}: ${settingsDescription(item.settingsSnapshot)}`));
       else if(!item.jobId&&item.state==="ready")copy.append(el("small","queue-settings-detail","Unfrozen · uses the visible settings when you submit this file."));
       else if(item.jobId)copy.append(el("small","queue-settings-detail",item.settingsSnapshotError||"Settings snapshot unavailable; use a newer server for queue editing."));
+      if(namingCapability){
+        if(item.state==="completed")copy.append(el("small","queue-name-detail",item.outputName?`Output name: ${item.outputName}`:item.namingSnapshotError||"Completed job did not report its actual output name."));
+        else if(item.outputName||item.plannedOutputName)copy.append(el("small","queue-name-detail",item.outputName?`Output name: ${item.outputName}`:`Planned output: ${item.plannedOutputName}`));
+        if(item.outputNameTemplateSnapshot)copy.append(el("small","queue-name-detail",`${item.jobId?"Server name template":item.namingFrozen?"Frozen name template":"Name template"}: ${item.outputNameTemplateSnapshot}`));
+        else if(!item.jobId&&item.state==="ready")copy.append(el("small","queue-name-detail",`Unfrozen · uses current template at submit: ${currentOutputNameTemplate}`));
+        else if(item.jobId)copy.append(el("small","queue-name-detail",item.namingSnapshotError||"Name template snapshot unavailable from this server."));
+      }
       if(item.jobId&&!item.file)copy.append(el("small","queue-source-detail",item.sourceAvailable===true?"Server has a readable working upload; this browser has no retry source file.":"Source is not retained for retry. Reselect the original file; filenames are not matched automatically."));
       else if(!item.jobId&&item.file)copy.append(el("small","queue-source-detail","Original file is held in this browser tab."));
       const actions=el("div","row-actions");
@@ -750,7 +959,7 @@ if (typeof document !== "undefined") (() => {
         const ready=items.filter((entry)=>!entry.jobId&&entry.state==="ready"),position=ready.indexOf(item);
         actions.append(queueAction("Move up",`Move ${item.name} earlier among ready files`,`move-ready-${item.uid}--1`,()=>moveLocalReady(item,-1),position===0));
         actions.append(queueAction("Move down",`Move ${item.name} later among ready files`,`move-ready-${item.uid}-1`,()=>moveLocalReady(item,1),position===ready.length-1));
-        actions.append(queueAction("Use current settings",`Freeze current settings for ${item.name}`,`use-current-${identity}`,()=>{freezeReadyItem(item);queueWorkflowMessage=`Froze the visible settings for ${item.name}.`;updateQueue(item.uid,`use-current-${identity}`);}));
+        actions.append(queueAction(namingCapability?"Freeze settings + name":"Freeze settings",namingCapability?`Freeze current settings and output name template for ${item.name}`:`Freeze current settings for ${item.name}`,`use-current-${identity}`,()=>{freezeReadyItem(item);queueWorkflowMessage=namingCapability?`Froze the visible settings and name template for ${item.name}.`:`Froze the visible settings for ${item.name}.`;updateQueue(item.uid,`use-current-${identity}`);},!canFreezeName));
       }
       if(item.jobId&&caps&&item.state==="queued"&&item.queuePosition!==null){
         const remoteIndex=queuedExports.findIndex((job)=>job.id===item.jobId);
@@ -759,9 +968,10 @@ if (typeof document !== "undefined") (() => {
         actions.append(queueAction("Use current settings",`Apply visible settings to queued export ${item.name}`,`use-current-${identity}`,()=>updateQueuedSettings(item,`use-current-${identity}`)));
         actions.append(queueAction("Remove queued",`Remove ${item.name} from the server queue`,`remove-queued-${identity}`,()=>removeQueuedItem(item,`remove-queued-${identity}`)));
       }
+      if(item.jobId&&namingCapability&&item.state==="queued"&&frontendContract.isOrdinaryExportJob(item))actions.append(queueAction("Use current name",`Apply the current output name template to queued export ${item.name}`,`use-current-name-${identity}`,()=>updateQueuedName(item,`use-current-name-${identity}`),!canFreezeName));
       if(item.settingsSnapshot)actions.append(queueAction("Use settings",`Load settings snapshot from ${item.name} into the controls`,`use-snapshot-${identity}`,()=>useJobSettings(item)));
-      if(["failed","canceled"].includes(item.state)&&item.file&&item.settingsSnapshot)actions.append(queueAction("Retry as new job",`Retry ${item.name} as a new job using its original settings`,`retry-${identity}`,()=>retryQueueItem(item)));
-      if(item.jobId&&item.file)actions.append(queueAction("Duplicate with current settings",`Create a new ready copy of ${item.name} with current settings`,`duplicate-${identity}`,()=>duplicateQueueItem(item)));
+      if(["failed","canceled"].includes(item.state)&&item.file&&item.settingsSnapshot&&(!namingCapability||item.outputNameTemplateSnapshot))actions.append(queueAction("Retry as new job",`Retry ${item.name} as a new job using its original settings and name template`,`retry-${identity}`,()=>retryQueueItem(item)));
+      if(item.jobId&&item.file)actions.append(queueAction("Duplicate with current settings",`Create a new ready copy of ${item.name} with current settings`,`duplicate-${identity}`,()=>duplicateQueueItem(item),!frontendContract.canSnapshotOutputNameTemplate(namingCapability,currentOutputNameTemplate)));
       if(!activeStates.has(item.state))actions.append(queueAction("Remove",`Remove ${item.name} from this browser queue`,`remove-local-${identity}`,()=>{removeItem(item);saveHidden();updateQueue(identity,`remove-local-${identity}`);}));
       row.append(icon,copy,actions);if(item.error)row.append(el("div","job-error",item.error));ui.queueRows.append(row);
     }
@@ -819,7 +1029,7 @@ if (typeof document !== "undefined") (() => {
     ui.runtimeDescription.textContent=runtime.available?`ONNX Runtime ${runtime.version || ""} ready. Providers: ${providers}. ${capability}. ${actual}.${runtime.error ? ` ${runtime.error}` : ""}`:`ONNX Runtime is missing. Install the project dependencies, then restart StereoLab.${runtime.error ? ` ${runtime.error}` : ""}`;
     ui.runtimeCommand.hidden=Boolean(runtime.available);
   }
-  async function loadStatus(){try{status=await request("/api/status");statusLoadError="";customModelAvailable=Boolean(status.model_available);ui.modelState.textContent=customModelAvailable?(status.model_name||"Custom model loaded"):"No model loaded";runtime=status.runtime_info||status.runtime||runtime;ui.enginePill.classList.toggle("offline",!status.ffmpeg_found);ui.engineText.textContent=status.ffmpeg_found?"Local video tools ready":"FFmpeg needed for video";ui.toolDescription.textContent=status.ffmpeg_found?"FFmpeg ready for local video exports.":"FFmpeg is missing. Photo export remains available.";ui.toolPath.textContent=status.ffmpeg_path||"Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.";renderRuntime();updateSettings(false);}catch(error){statusLoadError=error.message;ui.enginePill.classList.add("offline");ui.engineText.textContent="Local server unavailable";ui.toolDescription.textContent=error.message;toast("Could not connect to the local server.",true);updateProcessedClipPanel();}}
+  async function loadStatus(){try{status=await request("/api/status");statusLoadError="";namingCapability=frontendContract.outputNamingCapability(status);ui.outputNamingControls.hidden=!namingCapability;if(namingCapability)ui.outputNameTemplate.maxLength=namingCapability.max_template_length*2;customModelAvailable=Boolean(status.model_available);ui.modelState.textContent=customModelAvailable?(status.model_name||"Custom model loaded"):"No model loaded";runtime=status.runtime_info||status.runtime||runtime;ui.enginePill.classList.toggle("offline",!status.ffmpeg_found);ui.engineText.textContent=status.ffmpeg_found?"Local video tools ready":"FFmpeg needed for video";ui.toolDescription.textContent=status.ffmpeg_found?"FFmpeg ready for local video exports.":"FFmpeg is missing. Photo export remains available.";ui.toolPath.textContent=status.ffmpeg_path||"Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.";renderRuntime();updateSettings(false);updateQueue();}catch(error){statusLoadError=error.message;namingCapability=null;ui.outputNamingControls.hidden=true;ui.enginePill.classList.add("offline");ui.engineText.textContent="Local server unavailable";ui.toolDescription.textContent=error.message;toast("Could not connect to the local server.",true);updateProcessedClipPanel();updateQueue();}}
   async function retryGpuAction(){
     if(!frontendContract.retrySupported(runtime)||ui.retryGpu.disabled)return;
     ui.retryGpu.disabled=true;ui.retryGpu.textContent="Resetting GPU retry…";
@@ -851,21 +1061,28 @@ if (typeof document !== "undefined") (() => {
   function mergeJob(item,job){
     const metrics=["eta_seconds","eta_status","eta_range_seconds","elapsed_seconds","processing_fps","frames_processed","total_frames","encoder","phase","retry_count","retry_reason","preflight"];
     const reported=Object.fromEntries(metrics.filter((key)=>Object.hasOwn(job,key)).map((key)=>[key,job[key]]));let snapshot=item.settingsSnapshot?{settings:item.settingsSnapshot,sourceAvailable:item.sourceAvailable??Boolean(item.file),queuePosition:item.queuePosition??null}:null,snapshotError=item.settingsSnapshotError||"";
+    const notice=frontendContract.observeCompletionNotice(completionNoticeTracker,job,item.state);completionNoticeTracker=notice.tracker;
     if(job.settings_schema_version!=null||job.settings!=null){snapshot=null;snapshotError="";try{snapshot=frontendContract.validateQueueJobSnapshot(job);}catch(error){snapshotError=error.message;}}
-    Object.assign(item,{jobId:job.id,purpose:job.purpose,name:job.filename||item.name,mediaType:job.media_type||item.mediaType,state:job.state,progress:job.progress,message:job.message,error:job.error,outputName:job.output_name,layout:job.layout,execution:job.execution,executionMode:job.execution_mode,pipeline:job.pipeline,settingsSchemaVersion:job.settings_schema_version??null,settingsSnapshot:snapshot?.settings||null,settingsSnapshotError:snapshotError,settingsFrozen:Boolean(snapshot),sourceAvailable:snapshot?.sourceAvailable??null,queuePosition:snapshot?.queuePosition??null},reported);
+    let naming=item.outputNameTemplateSnapshot?{outputNameTemplate:item.outputNameTemplateSnapshot,plannedOutputName:item.plannedOutputName||null,outputName:item.outputName||null}:null,namingError=item.namingSnapshotError||"";
+    if(job.naming_schema_version!=null||job.output_name_template!=null||job.planned_output_name!=null||job.output_name!=null){naming=null;namingError="";try{naming=frontendContract.validateQueueJobNaming(job);}catch(error){namingError=error.message;}}
+    else if(namingCapability){naming=null;namingError="The server did not include an output name template snapshot. Refresh or upgrade StereoLab.";}
+    Object.assign(item,{jobId:job.id,purpose:job.purpose,name:job.filename||item.name,mediaType:job.media_type||item.mediaType,state:job.state,progress:job.progress,message:job.message,error:job.error,outputName:job.output_name??naming?.outputName??item.outputName??null,plannedOutputName:naming?.plannedOutputName??item.plannedOutputName??null,outputNameTemplateSnapshot:naming?.outputNameTemplate??item.outputNameTemplateSnapshot??null,namingFrozen:Boolean(naming||item.namingFrozen),namingSchemaVersion:job.naming_schema_version??item.namingSchemaVersion??null,namingSnapshotError:namingError,layout:job.layout,execution:job.execution,executionMode:job.execution_mode,pipeline:job.pipeline,settingsSchemaVersion:job.settings_schema_version??null,settingsSnapshot:snapshot?.settings||null,settingsSnapshotError:snapshotError,settingsFrozen:Boolean(snapshot),sourceAvailable:snapshot?.sourceAvailable??null,queuePosition:snapshot?.queuePosition??null},reported);
+    return notice.notify;
   }
-  function mergeRemoteJobs(remote){for(const job of remote){if(hiddenJobs.has(job.id)||!frontendContract.isOrdinaryExportJob(job))continue;let item=items.find((x)=>x.jobId===job.id);if(!item){item={uid:job.id};items.push(item);}mergeJob(item,job);}updateQueue();}
+  function mergeRemoteJobs(remote){const completed=[];for(const job of remote){if(hiddenJobs.has(job.id)||!frontendContract.isOrdinaryExportJob(job))continue;let item=items.find((x)=>x.jobId===job.id);if(!item){item={uid:job.id};items.push(item);}if(mergeJob(item,job))completed.push(job.filename||item.name);}updateQueue();showCompletionNoticeBatch(completed);}
   async function refreshQueueFromServer(){const data=await request("/api/jobs"),remote=Array.isArray(data)?data:(data.jobs||[]);mergeRemoteJobs(remote);}
-  async function submitItem(item,settings){
-    item.settingsSnapshot=frontendContract.validateSettings(settings);item.settingsFrozen=true;item.state="uploading";item.message="Adding to local queue";item.error=null;updateQueue();
-    const data=new FormData();data.append("file",item.file,item.name);Object.entries(item.settingsSnapshot).forEach(([key,value])=>data.append(key,value));
-    try{const job=await request("/api/jobs",{method:"POST",body:data});mergeJob(item,job);items=items.filter((x)=>x===item||x.jobId!==job.id);}
+  async function submitItem(item,settings,outputNameTemplate=null){
+    const nameTemplate=frontendContract.outputNameTemplateForSubmission(namingCapability,item,outputNameTemplate||currentOutputNameTemplate);
+    item.settingsSnapshot=frontendContract.validateSettings(settings);item.settingsFrozen=true;if(nameTemplate){item.outputNameTemplateSnapshot=nameTemplate;item.namingFrozen=true;}item.state="uploading";item.message="Adding to local queue";item.error=null;updateQueue();
+    const data=new FormData();data.append("file",item.file,item.name);Object.entries(item.settingsSnapshot).forEach(([key,value])=>data.append(key,value));if(nameTemplate)data.append("output_name_template",nameTemplate);
+    let completed=false;try{const job=await request("/api/jobs",{method:"POST",body:data});completed=mergeJob(item,job);items=items.filter((x)=>x===item||x.jobId!==job.id);}
     catch(error){item.state="failed";item.error=error.message;item.message="Could not start conversion";}
     updateQueue();
+    return completed;
   }
-  async function convertPending(){if(submitting)return;const block=readiness();if(block){toast(block,true);return;}const pending=items.filter((x)=>!x.jobId&&x.state==="ready");if(!pending.length)return;const settings=currentSettingsForPreset();submitting=true;updateQueue();try{for(const item of pending){if(items.includes(item)&&item.state==="ready")await submitItem(item,item.settingsSnapshot||settings);}}finally{submitting=false;updateQueue();await pollJobs();}}
+  async function convertPending(){if(submitting)return;const pending=items.filter((x)=>!x.jobId&&x.state==="ready");if(!pending.length)return;const settings=currentSettingsForPreset(),block=frontendContract.queueReadiness(pending,settings,{runtime,models,customModelAvailable,catalogError});if(block){toast(block,true);return;}const namingBlock=queueNamingBlock(pending);if(namingBlock){toast(namingBlock,true);ui.outputNameTemplate.focus();return;}submitting=true;updateQueue();const completed=[];try{for(const item of pending){if(items.includes(item)&&item.state==="ready"&&await submitItem(item,frontendContract.effectiveQueueSettings(item,settings),namingCapability?frontendContract.outputNameTemplateForSubmit(item,currentOutputNameTemplate):null))completed.push(item.name);}showCompletionNoticeBatch(completed);}finally{submitting=false;updateQueue();await pollJobs();}}
   async function pollJobs(){
-    if(jobsBusy)return;jobsBusy=true;clearTimeout(jobTimer);jobTimer=null;
+    updateCompletionNotificationControls();if(jobsBusy)return;jobsBusy=true;clearTimeout(jobTimer);jobTimer=null;
     try{await refreshQueueFromServer();}
     catch(error){ui.queueEmpty.hidden=items.length>0;if(!items.length){ui.queueEmpty.querySelector("strong").textContent="Could not restore the local queue";ui.queueEmpty.querySelector("small").textContent=error.message;}else toast(`Queue refresh failed: ${error.message}`,true);}
     finally{jobsBusy=false;if(items.some((x)=>["queued","processing"].includes(x.state)))jobTimer=setTimeout(pollJobs,1500);}
@@ -884,9 +1101,13 @@ if (typeof document !== "undefined") (() => {
   ["strength","convergence","temporalSmoothing"].forEach((id)=>ui[id].addEventListener("input",()=>{ui.presetSelect.value="custom";updateSettings();}));["edgeRefinement","invertDepth"].forEach((id)=>ui[id].addEventListener("change",()=>{ui.presetSelect.value="custom";updateSettings();}));
   ["layoutSelect","modelSize","resolution","quality","executionMode"].forEach((id)=>ui[id].addEventListener("change",()=>updateSettings()));ui.depthMode.addEventListener("change",()=>{updateSettings();renderModels();});
   ui.convertButton.addEventListener("click",convertPending);ui.modelButton.addEventListener("click",()=>ui.modelInput.click());ui.modelInput.addEventListener("change",()=>uploadModel(ui.modelInput.files[0]));ui.installSelected.addEventListener("click",()=>installModel(ui.depthMode.value));ui.refreshModels.addEventListener("click",()=>{loadModels();loadStatus();});
+  ui.completionNotifications.addEventListener("click",toggleCompletionNotifications);
+  window.addEventListener("keydown",(event)=>{const action=frontendContract.keyboardShortcutAction({altKey:event.altKey,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,repeat:event.repeat,defaultPrevented:event.defaultPrevented,isComposing:event.isComposing,code:event.code,target:event.target,modalOpen:Boolean(document.querySelector("dialog[open]")),previewEnabled:!ui.generatePreview.disabled,submitEnabled:!ui.convertButton.disabled});if(!action)return;event.preventDefault();(action==="preview"?ui.generatePreview:ui.convertButton).click();});
+  window.addEventListener("focus",updateCompletionNotificationControls);document.addEventListener("visibilitychange",()=>{if(!document.hidden)updateCompletionNotificationControls();});
   ui.applySettingsToReady.addEventListener("click",applySettingsToReady);
+  ui.outputNameTemplate.addEventListener("input",()=>{currentOutputNameTemplate=ui.outputNameTemplate.value;try{frontendContract.validateOutputNameTemplate(currentOutputNameTemplate,namingCapability?.max_template_length??120);ui.outputNameTemplate.removeAttribute("aria-invalid");}catch(error){ui.outputNameTemplate.setAttribute("aria-invalid","true");ui.outputNamingStatus.textContent=error.message;}updateQueue();});
   ui.clearQueueButton.addEventListener("click",()=>{const finished=items.filter((x)=>["completed","failed","canceled"].includes(x.state));finished.forEach(removeItem);saveHidden();updateQueue();toast(finished.length?`${finished.length} finished item${finished.length===1?"":"s"} removed from this browser’s list.`:"There are no finished items to clear.");});
   ui.helpButton.addEventListener("click",()=>ui.aboutDialog.showModal());ui.aboutDone.addEventListener("click",()=>ui.aboutDialog.close());window.addEventListener("beforeunload",()=>{if(previewUrl)URL.revokeObjectURL(previewUrl);});
-  updateSettings(false);Promise.allSettled([loadStatus(),loadModels(),pollJobs()]);
+  updateCompletionNotificationControls();updateSettings(false);Promise.allSettled([loadStatus(),loadModels(),pollJobs()]);
 })();
 

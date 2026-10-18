@@ -371,6 +371,135 @@ assert.deepEqual(contract.moveQueuedExportIds(jobs, 'b', -1), ['b', 'a']);
 assert.deepEqual(contract.moveQueuedExportIds(jobs, 'a', -1), ['a', 'b']);
 """)
 
+    def test_output_naming_capability_and_template_parser_are_strict(self):
+        self.run_contract("""
+const status = { naming_capabilities: { schema_version: 1, supported: true, max_template_length: 120, fields: ['name', 'layout', 'model', 'date'], unique_job_id_suffix: true } };
+assert.deepEqual(contract.outputNamingCapability(status), status.naming_capabilities);
+assert.equal(contract.outputNamingCapability({}), null);
+for (const bad of [
+  { ...status.naming_capabilities, schema_version: 2 },
+  { ...status.naming_capabilities, supported: false },
+  { ...status.naming_capabilities, max_template_length: 121 },
+  { ...status.naming_capabilities, fields: ['name', 'layout', 'model'] },
+  { ...status.naming_capabilities, unique_job_id_suffix: false }
+]) assert.equal(contract.outputNamingCapability({ naming_capabilities: bad }), null);
+assert.equal(contract.validateOutputNameTemplate('{name}_{layout}-{model}.{date}'), '{name}_{layout}-{model}.{date}');
+assert.equal(contract.validateOutputNameTemplate('東京 scene {layout}'), '東京 scene {layout}');
+assert.equal(contract.validateOutputNameTemplate('scene-😀_{layout}'), 'scene-😀_{layout}');
+assert.equal(contract.validateOutputNameTemplate('😀'.repeat(61) + '{name}'), '😀'.repeat(61) + '{name}');
+for (const value of ['', '   ', 'x'.repeat(121), '😀'.repeat(121), '{unknown}', '{name', 'name}', '{name!r}', '{name.attr}', '{name:>20}', 'a/b', 'a\\\\b', 'a:b', 'a*', 'a?', '\\uD800', '\\uDC00', 'a\\u0085b', 'a\\u200Bb', 'a\\u202Eb']) {
+  assert.throws(() => contract.validateOutputNameTemplate(value), /template|token|character|120|empty/i, `accepted ${value}`);
+}
+for (const value of ['a\\u0085b', 'a\\u200Bb', 'a\\u202Eb', 'a\\uD800b']) assert.throws(() => contract.validateOutputBasename(value, 'planned output name'), /unsafe/i);
+""")
+
+    def test_output_naming_job_snapshot_and_ready_item_freeze_retry_duplicate(self):
+        self.run_contract("""
+const settings = { layout: 'SBS', strength: 5, convergence: 0.5, depth_mode: 'depth-anything-v2-small', execution_mode: 'auto', input_size: 256, resolution: '1080p', quality: 'balanced', temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false };
+const job = { naming_schema_version: 1, output_name_template: '{name}_{layout}_{date}', planned_output_name: 'scene_sbs_20261018_12345678-1234-1234-1234-123456789abc.png', output_name: null };
+assert.deepEqual(contract.validateQueueJobNaming(job), { outputNameTemplate: job.output_name_template, plannedOutputName: job.planned_output_name, outputName: null });
+assert.deepEqual(contract.validateQueueJobNaming({}), null);
+assert.throws(() => contract.validateQueueJobNaming({ ...job, output_name_template: '{name}/{layout}' }), /template|character/i);
+assert.throws(() => contract.validateQueueJobNaming({ ...job, naming_schema_version: 2 }), /schema/i);
+assert.throws(() => contract.validateQueueJobNaming({ ...job, planned_output_name: '' }), /planned|name/i);
+assert.throws(() => contract.validateQueueJobNaming({ ...job, planned_output_name: 'D:\\\\private\\\\scene.png' }), /unsafe|output name/i);
+assert.throws(() => contract.validateQueueJobNaming({ ...job, state: 'completed' }), /actual output name/i);
+assert.equal(contract.validateQueueJobNaming({ ...job, state: 'completed', output_name: 'scene-sbs-uuid.png' }).outputName, 'scene-sbs-uuid.png');
+const file = { name: 'scene.png' };
+const ready = contract.freezeReadyQueueItem({ file, name: file.name, state: 'ready' }, settings, '{name}_{model}');
+assert.equal(ready.settingsFrozen, true);
+assert.equal(ready.namingFrozen, true);
+assert.equal(ready.outputNameTemplateSnapshot, '{name}_{model}');
+assert.equal(contract.outputNameTemplateForSubmit(ready, '{name}_{layout}'), '{name}_{model}');
+assert.equal(contract.outputNameTemplateForSubmit({ ...ready, namingFrozen: false }, '{name}_{layout}'), '{name}_{layout}');
+const capability = contract.outputNamingCapability({ naming_capabilities: { schema_version: 1, supported: true, max_template_length: 120, fields: ['name', 'layout', 'model', 'date'], unique_job_id_suffix: true } });
+assert.equal(contract.outputNameTemplateForSubmission(capability, ready, '{name}_{layout}'), '{name}_{model}');
+assert.equal(contract.outputNameTemplateForSubmission(null, ready, 'ignored'), null);
+assert.equal(contract.canSnapshotOutputNameTemplate(capability, '{name}_{model}'), true);
+assert.equal(contract.canSnapshotOutputNameTemplate(capability, '{name}/{layout}'), false);
+assert.equal(contract.canSnapshotOutputNameTemplate(null, '{name}/{layout}'), true);
+assert.equal(contract.outputNameTemplateForSubmission(capability, ready, '{name}/{layout}'), '{name}_{model}');
+assert.throws(() => contract.outputNameTemplateForSubmission(capability, { ...ready, namingFrozen: false }, '{name}/{layout}'), /character|filename/i);
+const retry = contract.makeReadyQueueCopy({ ...job, file, name: file.name, size: 10, mediaType: 'image', outputNameTemplateSnapshot: job.output_name_template }, settings, job.output_name_template);
+assert.equal(retry.outputNameTemplateSnapshot, job.output_name_template);
+assert.equal(contract.outputNameTemplateForQueueCopy({ outputNameTemplateSnapshot: job.output_name_template }, 'retry', '{name}_{layout}'), job.output_name_template);
+const duplicate = contract.makeReadyQueueCopy({ file, name: file.name, size: 10, mediaType: 'image' }, settings, '{name}_{date}');
+assert.equal(duplicate.outputNameTemplateSnapshot, '{name}_{date}');
+assert.equal(contract.outputNameTemplateForQueueCopy({ outputNameTemplateSnapshot: job.output_name_template }, 'duplicate', '{name}_{date}'), '{name}_{date}');
+assert.equal(contract.outputNameTemplateForSubmit({ ...duplicate, namingFrozen: false }, '{name}_{layout}'), '{name}_{layout}');
+const mutation = contract.queuedNameUpdateRequest('job / 1', '{name}_{model}');
+assert.equal(mutation.url, '/api/jobs/job%20%2F%201/naming');
+assert.equal(mutation.options.method, 'POST');
+assert.deepEqual(JSON.parse(mutation.options.body), { output_name_template: '{name}_{model}' });
+assert.throws(() => contract.queuedNameUpdateRequest('', '{name}'), /job ID/i);
+""")
+
+    def test_queue_readiness_uses_each_frozen_settings_snapshot(self):
+        self.run_contract("""
+const small = { ...contract.performancePreset('balanced'), depth_mode: 'depth-anything-v2-small', execution_mode: 'cpu' };
+const unsupportedVisible = { ...small, depth_mode: 'depth-anything-v2-large', execution_mode: 'gpu' };
+const models = [{ id: 'depth-anything-v2-small', name: 'Small', state: 'ready' }];
+const context = { runtime: { available: true, gpu_available: false }, models, customModelAvailable: false };
+const frozen = { settingsFrozen: true, settingsSnapshot: small, name: 'frozen.png' };
+const unfrozen = { settingsFrozen: false, settingsSnapshot: small, name: 'current.png' };
+assert.deepEqual(contract.effectiveQueueSettings(frozen, unsupportedVisible), small);
+assert.deepEqual(contract.effectiveQueueSettings(unfrozen, unsupportedVisible), unsupportedVisible);
+assert.equal(contract.queueReadiness([frozen], unsupportedVisible, context), '');
+assert.match(contract.queueReadiness([frozen, unfrozen], unsupportedVisible, context), /GPU|NVIDIA/i);
+assert.equal(contract.queueReadiness([unfrozen], small, context), '');
+const missingFrozenModel = { ...frozen, settingsSnapshot: { ...small, depth_mode: 'depth-anything-v2-base' } };
+assert.match(contract.queueReadiness([missingFrozenModel], unsupportedVisible, context), /Base|install|model/i);
+""")
+
+    def test_completion_notice_policy_is_opt_in_bounded_and_transition_based(self):
+        self.run_contract("""
+assert.equal(contract.completionNotificationStatus(false, 'default', false).canEnable, false);
+assert.equal(contract.completionNotificationStatus(true, 'default', false).enabled, false);
+assert.equal(contract.completionNotificationStatus(true, 'default', false).canEnable, true);
+assert.match(contract.completionNotificationStatus(true, 'denied', false).message, /browser settings/i);
+assert.equal(contract.completionNotificationStatus(true, 'granted', true).enabled, true);
+let tracker = null;
+let result = contract.observeCompletionNotice(tracker, { id: 'old', state: 'completed', purpose: 'export' });
+tracker = result.tracker;
+assert.equal(result.notify, false);
+result = contract.observeCompletionNotice(tracker, { id: 'clip', state: 'queued', purpose: 'preview_clip' });
+tracker = result.tracker;
+result = contract.observeCompletionNotice(tracker, { id: 'clip', state: 'completed', purpose: 'preview_clip' }, 'queued');
+tracker = result.tracker;
+assert.equal(result.notify, false);
+result = contract.observeCompletionNotice(tracker, { id: 'new', state: 'queued', purpose: 'export' });
+tracker = result.tracker;
+assert.equal(result.notify, false);
+result = contract.observeCompletionNotice(tracker, { id: 'new', state: 'completed', purpose: 'export' }, 'queued');
+tracker = result.tracker;
+assert.equal(result.notify, true);
+result = contract.observeCompletionNotice(tracker, { id: 'new', state: 'completed', purpose: 'export' }, 'completed');
+tracker = result.tracker;
+assert.equal(result.notify, false);
+for (let index = 0; index < 520; index++) tracker = contract.observeCompletionNotice(tracker, { id: `active-${index}`, state: 'processing', purpose: 'export' }).tracker;
+assert.ok(tracker.trackedIds.length <= 512);
+assert.ok(tracker.activeIds.length <= 512);
+assert.ok(!tracker.trackedIds.includes('active-0'));
+""")
+
+    def test_keyboard_shortcut_policy_filters_context_and_readiness(self):
+        self.run_contract("""
+const base = { altKey: true, code: 'KeyP', previewEnabled: true, submitEnabled: true, target: { tagName: 'DIV' } };
+assert.equal(contract.keyboardShortcutAction(base), 'preview');
+assert.equal(contract.keyboardShortcutAction({ ...base, code: 'Enter' }), 'submit');
+for (const blocked of [
+  { ...base, ctrlKey: true }, { ...base, metaKey: true }, { ...base, shiftKey: true },
+  { ...base, repeat: true }, { ...base, defaultPrevented: true }, { ...base, isComposing: true },
+  { ...base, modalOpen: true }, { ...base, previewEnabled: false }, { ...base, target: { tagName: 'INPUT' } },
+  { ...base, target: { tagName: 'TEXTAREA' } }, { ...base, target: { tagName: 'SELECT' } },
+  { ...base, target: { tagName: 'DIV', isContentEditable: true } }
+]) assert.equal(contract.keyboardShortcutAction(blocked), null);
+assert.equal(contract.keyboardShortcutAction({ ...base, altKey: false }), null);
+assert.equal(contract.keyboardShortcutAction({ ...base, code: 'KeyP', submitEnabled: false }), 'preview');
+assert.equal(contract.keyboardShortcutAction({ ...base, code: 'Enter', submitEnabled: false }), null);
+assert.equal(contract.keyboardShortcutAction({ ...base, code: 'KeyP', target: { tagName: 'DIV', isContentEditable: false } }), 'preview');
+""")
+
     def test_retry_or_duplicate_requires_browser_file_and_freezes_snapshot(self):
         self.run_contract("""
 const file = { name: 'scene.png' };

@@ -33,6 +33,8 @@ from depth_engine import ModelManager
 from depth_engine import MODEL_SPECS
 from job_queue import EditableJobQueue
 from job_settings import SETTINGS_SCHEMA_VERSION, settings_snapshot, validate_settings
+from output_naming import (DEFAULT_OUTPUT_NAME_TEMPLATE, MAX_TEMPLATE_LENGTH, NAMING_FIELDS,
+                           NAMING_SCHEMA_VERSION, render_output_name, validate_output_template)
 from preview_cache import PreviewDepthCache
 from preview_clip import ClipCancelled, prepare_preview_clip
 from preview_policy import (PREVIEW_UPLOAD_BYTES, PreviewPolicyError, preview_source_policy,
@@ -112,7 +114,7 @@ FFMPEG_PATH = find_ffmpeg()
 _SOURCE_COMPONENTS = ('main.py', 'depth_engine.py', 'stereo.py', 'video_encoder.py',
                       'video_pipeline.py', 'preview_cache.py', 'telemetry.py', 'preflight.py',
                       'calibration.py', 'resource_sampling.py', 'preview_policy.py', 'preview_clip.py',
-                      'job_queue.py', 'job_settings.py')
+                      'job_queue.py', 'job_settings.py', 'output_naming.py')
 APP_BUILD_FINGERPRINT = (hashlib.sha256(b''.join((ROOT / name).read_bytes() for name in _SOURCE_COMPONENTS)).hexdigest()
                          if all((ROOT / name).is_file() for name in _SOURCE_COMPONENTS) else None)
 JOBS: dict[str, "Job"] = {}
@@ -167,6 +169,7 @@ class Job:
     clip_duration_seconds: float = 3.0
     preview_source_path: Path | None = None
     clip: dict[str, Any] | None = None
+    output_name_template: str = DEFAULT_OUTPUT_NAME_TEMPLATE
 
     def public(self, queue_position: int | None = None) -> dict[str, Any]:
         elapsed_seconds = None
@@ -237,6 +240,9 @@ class Job:
             "settings": settings_snapshot(self),
             "source_available": source_available(self),
             "queue_position": queue_position,
+            "naming_schema_version": NAMING_SCHEMA_VERSION,
+            "output_name_template": self.output_name_template,
+            "planned_output_name": output_path_for(self).name,
             "input_size": self.input_size,
             "resolution": self.resolution,
             "quality": self.quality,
@@ -333,6 +339,9 @@ def safe_stem(filename: str) -> str:
 
 
 def output_path_for(job: Job) -> Path:
+    if job.purpose == 'export':
+        return OUTPUTS / render_output_name(job.output_name_template, job.filename, job.layout,
+                                            job.depth_mode, job.created_at, job.id, job.media_type)
     suffix = "png" if job.media_type == "image" else "mp4"
     layout_name = job.layout.lower()
     purpose = "_preview" if job.purpose == 'preview_clip' else ""
@@ -835,6 +844,9 @@ def status() -> dict[str, Any]:
         "queue_capabilities": {"schema_version": 1, "reorder_queued_exports": True,
                                "edit_queued_exports": True, "remove_queued_exports": True,
                                "settings_snapshot": True},
+        "naming_capabilities": {"schema_version": NAMING_SCHEMA_VERSION, "supported": True,
+                                "max_template_length": MAX_TEMPLATE_LENGTH, "fields": list(NAMING_FIELDS),
+                                "unique_job_id_suffix": True},
     }
 
 
@@ -1097,12 +1109,27 @@ async def create_job(
     purpose: str = Form("export"),
     clip_start_seconds: float = Form(0.0),
     clip_duration_seconds: float = Form(3.0),
+    output_name_template: Any = Form(DEFAULT_OUTPUT_NAME_TEMPLATE), request: Request = None,
 ) -> dict[str, Any]:
     filename = Path((file.filename or "input").replace("\\", "/")).name
     extension = Path(filename).suffix.lower()
     if purpose not in {'export', 'preview_clip'}:
         await file.close()
         raise HTTPException(status_code=400, detail='Choose export or preview_clip as job purpose.')
+    if purpose == 'export':
+        # FastAPI applies a Form default to an explicitly empty field. Inspect
+        # the already parsed form so an empty supplied template is rejected.
+        if request is not None:
+            form = await request.form()
+            if 'output_name_template' in form:
+                output_name_template = form['output_name_template']
+        try:
+            output_name_template = validate_output_template(output_name_template)
+        except ValueError as exc:
+            await file.close()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        output_name_template = DEFAULT_OUTPUT_NAME_TEMPLATE
     if purpose == 'preview_clip' and (extension not in VIDEO_EXTENSIONS
             or not math.isfinite(clip_start_seconds) or clip_start_seconds < 0
             or not math.isfinite(clip_duration_seconds) or not 1 <= clip_duration_seconds <= 5):
@@ -1170,6 +1197,7 @@ async def create_job(
         purpose=purpose,
         clip_start_seconds=clip_start_seconds,
         clip_duration_seconds=clip_duration_seconds,
+        output_name_template=output_name_template,
     )
     with JOB_QUEUE.lock, JOBS_LOCK:
         JOBS[job_id] = job
@@ -1220,6 +1248,20 @@ def edit_queued_settings(job_id: str, body: Any = Body(...)) -> dict[str, Any]:
         job = pending_export_locked(job_id)
         for name, value in settings.items():
             setattr(job, name, value)
+        return public_job_locked(job)
+
+
+@app.post('/api/jobs/{job_id}/naming')
+def edit_queued_naming(job_id: str, body: Any = Body(...)) -> dict[str, Any]:
+    try:
+        if type(body) is not dict or set(body) != {'output_name_template'}:
+            raise ValueError('Provide only an output_name_template string.')
+        template = validate_output_template(body['output_name_template'])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    with JOB_QUEUE.lock, JOBS_LOCK:
+        job = pending_export_locked(job_id)
+        job.output_name_template = template
         return public_job_locked(job)
 
 

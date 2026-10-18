@@ -574,3 +574,121 @@ hunks. Working files were not reverted. Exported the exact index to an isolated
 CPU 288 tests / 7.366s OK; GPU environment 288 tests / 7.258s OK. JavaScript syntax
 and staged whitespace pass. Generated media, weights, runtime state and binaries
 are excluded. This is a local source commit, with no push or EXE rebuild.
+
+## Commit then continue — next roadmap wave
+
+User requested commit then continue. Packaging commit a130916 follows roadmap
+fbab918; working tree was clean before this wave. Packaging spec/Powershell syntax
+valid and both288-test suites pass CPU7.675s/GPUenv7.759s. No EXE rebuild claim.
+Starting account window0% five-hour/45%weekly, no reset credit used.
+
+Frozen specs plans/output-naming.md and plans/gpu-variance-isolation.md.
+Exclusive lanes: diagnostic worker scripts/isolate_gpu_variance.py and
+ tests/test_variance_isolation.py; generated.runtime/variance-isolation only.
+It owns real GPU scheduling; preserve user8768(39records),8770(16),8772(3), allidle
+at start. Backend worker main.py,output_naming.py,tests/test_output_naming.py,
+tests/test_naming_jobs.py only. Frontend worker static/app.js/index.html/style.css,
+tests/test_frontend_contract.py only. Coordinator docs/plans, integration review,
+independent tests/liveCPU checks. No overlap or production GPU calls in otherlanes.
+Archive wave baseline copies under.runtime before edits. No worker commits.
+
+Coordinator responsive QA extension: after integration, create uniquely named
+TEMPORARY static/qa-responsive-<id>.html harnesses containing same-origin iframe
+viewports (320/375/768px). This exercises real CSS viewport queries without a
+browser-resize API. Read DOM scrollWidth/rects and capture screenshots through CUA.
+Harnesses are coordinator-only (no worker file overlap) and will be moved into
+.runtime/continuation-verification after QA. This is desktop-engine embedded
+viewport evidence, not physical phone/touch/display proof. No production routes
+or app behavior are modified for testing.
+
+Naming integration: coordinator CPU320 tests8.144s and GPUenv320 tests8.105s pass.
+Diagnostic lane released. Independently recomputed all stage differences from
+NPZ captures and rehashed/decoded both encode pairs: raw ONNX first-frame-only
+max1.9073486e-6; rendered4 changed channel values/max1; repeats2/3 exactly equal.
+Fixed-input libx264 and NVENC output files and all36 decoded frames identical
+within each codec. Independent report continuation-verification/independent-variance.json.
+This synthetic Small/one-session observation does not close the previous clip
+pixel gate, prove universal determinism, or justify production warmup changes.
+
+Next bounded frontend fix: effective per-file settings determine queue readiness;
+changing visible unsupported engine/device must not block valid frozen readyfiles.
+Same frontend exclusive lane; red regression then coordinator review/browser QA.
+Backend worker plans/job-history.md design only; no persistence implementation yet.
+Fresh coordinator-owned CPU8773 started/session70442, old APIs remain preserved.
+
+Naming live/browser accepted: frozen approximation engine and custom template
+exported correctly despite visible invalidpath/unloadedcustommodel. PNG640x180,
+fullUUID/date name independently downloaded/decoded. Live queuedrename200,
+invalidcreate/edit400, terminaledit409; blockerCPUjob canceled and queuedimage
+completed. Reports browser-naming-job.json and live-naming.json undercontinuation.
+ResponsiveQA iframe320/375/768 actual CSS viewports: no document horizontaloverflow
+and no out-of-bounds buttons/inputs/select/queuerows; filenamewrap/actionwrap visible.
+Not physicalphone/touchproof. Temporaryharness stillowned, removefromstaticafterQA.
+
+Next frontend exclusivewave plans/queue-notifications-shortcuts.md: explicit
+tab-only opt-in completion notices, bounded dedupe, existingbutton keyboardpaths,
+pure red/green tests. No real permission grant. Coordinator docs/integration;
+backend plans/job-history.md only. No persistenceproduction work yet.
+
+History architecture reviewed: explicit stable instance opt-in, OS-held lease,
+SQLite metadata-only store and separate previous-boot DTOs. Implement storage
+foundation first, not main.py integration: backend owns new job_history.py and
+tests/test_job_history.py only, plus spec corrections. Use real isolated Windows
+process lease/crash tests; no source/output cleanup or production service use.
+Frontend continues notification/shortcut lane independently. Coordinator reviews
+storage API before any app wiring; README must label foundation until integrated.
+
+Diagnostic review correction: CPU default had called production encoderselector,
+which probes NVENC. Fixed diagnostic-only CPU branch to construct productionfast
+softwareprofile without selector/hardwareprobe; explicitGPU unchanged. Regression
+red hardwareprobe called, then9CPUutilitytests green. Coordinator ran realCPU
+diagnostic report variance-isolation/20261018T163225Z-f5a4316b/report.json:
+all3repeats rawONNX/normalized/refined/temporal/BGR exact; libx264 files identical;
+hardware_probe_performed=false. NPZ/filehash independently checked in
+continuation-verification/cpu-variance-independent.json. No app defaults changed.
+Temporaryresponsiveharness moved out ofstatic into continuation-verification.
+
+Notifications/shortcuts lane released. Coordinator inspected implementation and
+ran64 completed-featuretests2.470s OK (frontend32+naming23+diagnostic9), NodesyntaxOK.
+Livebrowser Alt+P generatedapproximationpreview, Alt+Enter submittedreadyfixture,
+editabletextAlt+Enter didnot; notificationpermission neverrequested, defaultoff.
+PreviewtabArrowRight/End changedselectedtab andtabpanel labelcorrectly. Rootadded
+aria-keyshortcuts and completedoldbackendfreezerow settings-onlywording.
+Historyfoundationstillbeingimplemented: fullsuite329/20fail overlapped its initial
+redstubs; allfailuresin test_job_history, NOT accepted releasegates. Preserve those
+integrated-*logs as inprogress evidence; rerunfullsuites afterfoundationrelease.
+58% fivehour/54%weekly usage observed; noresetused. Newimplementation remains
+uncommitted after a130916. HANDOFFbeingupdated incrementally, finalgatespending.
+
+## Continuation closing handoff
+
+Final history foundation is released as standalone job_history.py plus25 focused
+tests and exact plans/job-history.md API. Real Windows process contention/exit,
+stale lock contents, crash before/after terminal commit, generic exec-child lease
+noninheritance and database/lease hardlink tests pass. Review found startup-error
+lease leaks and dangling/hardlink namespace escapes; targeted red regressions
+preceded fixes. Real symlink creation skipped (Windows privilege1314); independent
+mocked dangling-link rejection passes. POSIX execution remains unverified.
+No history imports, server wiring, source retention or automatic requeue added.
+Root corrected spec's explicit-null naming sentence to match rejection behavior.
+
+Coordinator independently inspected final source/tests and ran both full suites:
+CPU350 tests11.661s, GPUenvironment350 tests11.766s, both OK with the one expected
+symlink-creation skip. Final logs under .runtime/continuation-verification.
+Compileall, Node syntax, tracked whitespace and all20 changed/new text files pass.
+Earlier integrated-* failures were unfinished history red stubs, now superseded.
+
+Latest GPU8774 PID13868/session7200, build65bcb937dc4ccb86c2196d44f3ccd676a7e32a8caff1d06e8c392e70eaac3ae1,
+is source-matched with one completed generated Small DML256 custom-name PNG640x180
+(actual252x140, no fallback). Browser tab5 retained. Final preserved old services:
+8768 has39,8770 has16,8772 has3 terminal records; no active work and no restarts.
+Own CPU8773 PID25384 stopped only after allfour terminal records saved. Old user
+download URLs remain available; own CPU files persist, its temporary URLs stopped.
+
+Observed closing usage83% five-hour/58%weekly; no reset consumed. All workers
+released. HANDOFF.md rewritten with completed work, exact evidence, limitations,
+server ownership and next integration gates; previous handoff archived. Commits
+fbab918/a130916 remain the latest commits; this continuation's20 files are
+uncommitted. No push, EXE rebuild, broad cleanup or additional roadmap promotion.
+The requested commit/continue-until-near-limit/handoff objective is complete;
+the roadmap itself remains unfinished.

@@ -236,8 +236,10 @@ reported separately from the requested source interval.
 
 Queue rows show their exact settings snapshot, actual device/provider, encoder,
 phase and fallback. Before upload, files use the visible controls unless you
-explicitly freeze their settings; **Apply current settings to ready files** freezes
-the batch. Move ready files up/down to choose submission order. Supported servers
+explicitly freeze their settings and output name; **Apply settings + name to ready
+files** freezes the batch. Frozen files are checked against their own engine and
+device settings even when the visible controls change. Move ready files up/down
+to choose submission order. Supported servers
 also allow pending exports to move, receive current settings, or be removed.
 An export already taken by the worker rejects queued edits, and queued preview
 clips keep their place when exports move. A changed queue prompts a refresh.
@@ -251,9 +253,41 @@ and does not survive a server restart. New outputs use the full job UUID and an
 exclusive reservation; a preexisting target is preserved and reported as a conflict.
 Existing exports keep their names.
 
+**Enable completion notifications** requests browser permission only when you
+click it and enables notices for the current tab. Each reload starts with notices
+off; existing completed jobs and processed clips never trigger them. Browser/OS
+permission and delivery vary. Queue processing continues if a notice cannot be
+shown. **Alt+P** generates the current still preview and **Alt+Enter** submits the
+ready queue when their buttons are enabled. Shortcuts ignore editable fields,
+open dialogs, held-key repeats and IME composition.
+
+On supported servers, output filename templates accept `{name}` (source stem),
+`{layout}`, `{model}` and `{date}` (job creation date in UTC, YYYYMMDD). The default
+is `{name}_{layout}`. Names are sanitized and bounded; the full unique job ID and
+PNG/MP4 extension are always added. Templates cannot choose folders or formatting
+expressions. Ready-file freezes include the template; retry preserves it and a
+duplicate uses the current one. **Use current name** changes only a pending
+server export's template, separately from its performance settings. Actual names
+remain visible after completion. Clips keep their own internal preview names.
+
+The bounded `scripts/isolate_gpu_variance.py --device gpu` diagnostic captures
+three repeats of a pinned, generated 36-frame Small-model proxy at raw ONNX,
+normalized/refined/temporal depth and rendered BGR stages. It separately repeats
+libx264 and available NVENC encoding with identical input frames. It requires the
+prior matched fixture and idle known local APIs, and does not change app defaults.
+One local run showed tiny first-frame raw-model variation while the second and
+third repeats matched exactly; fixed-input encoder pairs matched exactly. This
+does not establish universal determinism or close the earlier clip pixel gate.
+
 The server accepts loopback hosts and rejects browser writes from foreign origins
 or a different service port. Local CLI calls without an Origin remain supported.
 This is a local app boundary, not authentication for a public deployment.
+
+The standalone `job_history.py` module is preparatory storage work; it is not
+wired into the server or UI. Current app jobs still do not survive a restart.
+The instance configuration and history endpoints in `plans/job-history.md` describe
+the next integration slice, not currently available app features. Source retention,
+automatic restart and frame-level resume remain unavailable.
 
 DEPTH/RGB-D no longer synthesize unused stereo eyes. An alternating four-sample
 1080p approximation-to-PNG benchmark measured DEPTH medians 0.321 â†’ 0.277 seconds
