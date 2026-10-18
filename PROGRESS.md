@@ -246,3 +246,30 @@ Verification completed:
 - NVENC probe/profile and CPU retry paths have unit coverage; a GTX 1650 Ti smoke
   encode succeeded for all three quality profiles. Final worktree review and
   whitespace checks passed. Changes remain uncommitted.
+
+## DirectML on 4 GB GPUs (2026-10-18)
+
+Request: allow every built-in named depth model, including Depth Anything V2 Large,
+to attempt DirectML on a 4 GB GPU. Removed the Large hard CPU route/rejection and
+added a 518 px maximum long-side input cap for Large on adapters with 4 GB or less.
+Auto/Hybrid retains the existing one-time CPU retry after a GPU session/inference
+failure; explicit NVIDIA GPU mode reports the failure. The UI recommends 256 px
+detail and detects an old running backend that has not picked up this policy yet.
+
+Verification: new mocked DirectML tests confirm Large is routed to the GPU at 4 GB,
+uses the reduced input cap, and falls back to CPU after an out-of-memory failure.
+The live server was restarted only after its queue contained canceled jobs and no
+active conversion or completed output. Its `/api/status` now reports the new policy,
+all four built-in models are ready, and `/api/jobs` is empty. Real previews on the
+GTX 1650 Ti (3,935 MiB reported by the adapter) verified Large at both 256 detail
+(252x196 model input) and the full 518 detail cap (518x280 model input) with
+`DmlExecutionProvider`, no fallback, and GPU verification true. MiDaS also completed
+a DirectML preview. A separate post-preview `nvidia-smi` sample showed 1,907 MiB
+device memory in use and 2,029 MiB free; this is resident usage after inference,
+not peak allocation. Earlier live Small and Base runs also showed DirectML. The
+Large 518 cap and OOM retry behavior are additionally covered by mocked tests.
+
+Final verification: all 75 unit tests pass in both `.venv` and `.venv-gpu`;
+`py_compile`, `node --check static/app.js`, and `git diff --check` pass. The local
+server is running at `http://127.0.0.1:8766/`. The implementation and its independent
+critique brief are included in the follow-up commit after this verification.

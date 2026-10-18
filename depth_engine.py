@@ -29,6 +29,8 @@ from gpu_hardware import probe_hardware
 CPU_PROVIDER = 'CPUExecutionProvider'
 GPU_PROVIDER = 'DmlExecutionProvider'
 EXECUTION_MODES = ('auto', 'cpu', 'gpu', 'hybrid')
+GPU_MAX_INPUT_DIMENSION = 924
+LARGE_4GB_GPU_MAX_INPUT_DIMENSION = 518
 
 
 MODEL_SPECS = {
@@ -54,7 +56,7 @@ MODEL_SPECS = {
         "sha256": "a93aa89b5e92e30e0afbe0f7c3ec692b35cfca791ae9004a190fb0ca2010e905",
         "size": 1336922232, "license": "CC-BY-NC-4.0 (non-commercial)", "recommended": False,
         "upstream": "depth-anything/Depth-Anything-V2-Large",
-        "description": "About 1.34 GB download; high memory use. CPU only on GPUs with 4 GB or less VRAM. Non-commercial weights.",
+        "description": "About 1.34 GB download; high memory use. DirectML is attempted on 4 GB GPUs with a reduced input cap; Auto/Hybrid can fall back to CPU. Non-commercial weights.",
     },
     "dpt-hybrid-midas": {
         "name": "DPT Hybrid / MiDaS", "repo": "Xenova/dpt-hybrid-midas",
@@ -78,7 +80,7 @@ class ModelManager:
         self._session: Any = None
         self._session_id: str | None = None
         self._session_key: tuple[str, str, int | None] | None = None
-        self._gpu_failures: dict[tuple[str, str, int | None], str] = {}
+        self._gpu_failures: dict[tuple[str, str, int | None, int], str] = {}
         self._gpu_verified = False
         self._last_execution: dict[str, Any] = {
             'requested_mode': None, 'active_provider': None, 'device': None,
@@ -124,7 +126,7 @@ class ModelManager:
                     'gpu_name': adapter['name'] if adapter else None, 'gpu_device': copy.deepcopy(adapter),
                     'gpu_error': gpu_error, 'adapters': copy.deepcopy(hardware['adapters']),
                     'last_execution': last,
-                    'gpu_memory_policy': 'Best effort: bounded input dimensions; DirectML has no configured hard VRAM limit. CPU nodes may remain.'}
+                    'gpu_memory_policy': 'Best effort: all named models may try DirectML. Large is limited to a 518 px long side on adapters with 4 GB or less; Auto/Hybrid fall back to CPU after GPU failures. DirectML has no hard VRAM limit; CPU nodes may remain.'}
         except Exception as exc:
             return {'available': False, 'providers': [], 'active_provider': last['active_provider'],
                     'device': last['device'], 'version': None, 'error': str(exc),
@@ -146,13 +148,19 @@ class ModelManager:
         reason = None
         if not runtime.get('gpu_available') or adapter is None:
             reason = runtime.get('gpu_error') or 'GPU DirectML backend is unavailable; using CPU.'
-        elif model_id == 'depth-anything-v2-large' and adapter.get('memory_mb', 0) <= 4096:
-            reason = 'Depth Anything V2 Large GPU inference is disabled on adapters with 4 GB or less VRAM; use Small/Base or CPU.'
         if reason:
             if execution_mode == 'gpu':
                 raise RuntimeError(reason)
             return CPU_PROVIDER, None, reason
         return GPU_PROVIDER, adapter, None
+
+    @staticmethod
+    def _gpu_input_limit(model_id: str, adapter: dict[str, Any] | None) -> int:
+        """Keep Large's activation footprint lower on 4 GB-class adapters."""
+        memory_mb = int((adapter or {}).get('memory_mb', 0) or 0)
+        if model_id == 'depth-anything-v2-large' and 0 < memory_mb <= 4096:
+            return LARGE_4GB_GPU_MAX_INPUT_DIMENSION
+        return GPU_MAX_INPUT_DIMENSION
 
     def _accepted(self, model_id: str) -> bool:
         spec = self._spec(model_id)
@@ -403,7 +411,7 @@ class ModelManager:
             raise ValueError("Depth inference needs a nonempty uint8 BGR image.")
         with self._inference_lock:
             provider, adapter, reason = self._execution_plan(model_id, execution_mode, self.runtime_info())
-            gpu_key = (model_id, GPU_PROVIDER, adapter['id'] if adapter else None)
+            gpu_key = (model_id, GPU_PROVIDER, adapter['id'] if adapter else None, input_size)
             if provider == GPU_PROVIDER and execution_mode != 'gpu' and gpu_key in self._gpu_failures:
                 provider, adapter, reason = CPU_PROVIDER, None, self._gpu_failures[gpu_key]
             with self._lock:
@@ -436,7 +444,7 @@ class ModelManager:
                         'device_id': adapter['id'] if adapter else None, 'fallback_reason': reason,
                         'gpu_verified': provider == GPU_PROVIDER,
                         'cpu_nodes_possible': provider == GPU_PROVIDER,
-                        'input_size_limit': 924 if provider == GPU_PROVIDER else None,
+                        'input_size_limit': self._gpu_input_limit(model_id, adapter) if provider == GPU_PROVIDER else None,
                     })
                 return depth
             except Exception as exc:
@@ -471,11 +479,11 @@ class ModelManager:
                 raise RuntimeError(f'{provider} is absent from the created session; ONNX Runtime silently fell back to CPU.')
             self._session_id = model_id
             self._session_key = key
-        result = (self._predict_with_session(self._session, frame, model_id, input_size, 924)
-                  if adapter else self._predict_with_session(self._session, frame, model_id, input_size))
+        input_limit = self._gpu_input_limit(model_id, adapter) if adapter else None
+        result = self._predict_with_session(self._session, frame, model_id, input_size, input_limit)
         if provider == GPU_PROVIDER and provider not in self._session.get_providers():
             raise RuntimeError(f'{provider} is no longer active after inference.')
-        out_h, out_w = self._input_size(self._session, *frame.shape[:2], model_id, input_size, 924 if adapter else None)
+        out_h, out_w = self._input_size(self._session, *frame.shape[:2], model_id, input_size, input_limit)
         with self._lock:
             self._last_execution.update({'input_width': out_w, 'input_height': out_h})
         return result

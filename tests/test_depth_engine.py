@@ -14,6 +14,7 @@ import numpy as np
 from depth_engine import MODEL_SPECS, ModelManager
 
 SMALL = 'depth-anything-v2-small'
+LARGE = 'depth-anything-v2-large'
 MIDAS = 'dpt-hybrid-midas'
 
 
@@ -235,23 +236,72 @@ class EngineTest(unittest.TestCase):
             snapshot['active_provider'] = 'made up'
             self.assertEqual(self.manager.execution_info()['active_provider'], 'DmlExecutionProvider')
 
-    def test_explicit_gpu_rejects_missing_backend_and_large_on_4gb(self):
+    def test_explicit_gpu_rejects_missing_backend(self):
         self.accepted(SMALL)
-        large = 'depth-anything-v2-large'
-        self.accepted(large)
-        with self.assertRaisesRegex(RuntimeError, 'GPU'):
-            self.manager.validate(SMALL, execution_mode='gpu')
-        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()):
-            with self.assertRaisesRegex(RuntimeError, '4 GB'):
-                self.manager.validate(large, execution_mode='gpu')
+        unavailable = {'available': True, 'gpu_available': False, 'gpu_error': 'DirectML is unavailable'}
+        with patch.object(self.manager, 'runtime_info', return_value=unavailable):
+            with self.assertRaisesRegex(RuntimeError, 'DirectML is unavailable'):
+                self.manager.validate(SMALL, execution_mode='gpu')
 
-    def test_large_auto_uses_cpu_with_reason(self):
-        large = 'depth-anything-v2-large'
-        self.accepted(large)
-        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), patch.object(self.manager, '_new_session', return_value=FakeSession()) as created:
-            self.manager.predict(np.zeros((8, 8, 3), np.uint8), large)
-            self.assertEqual(created.call_args.args, (self.manager._path(large),))
-            self.assertIn('4 GB', self.manager.execution_info()['fallback_reason'])
+    def test_large_uses_gpu_on_4gb_with_reduced_input_limit(self):
+        self.accepted(LARGE)
+        session = FakeSession(provider='DmlExecutionProvider')
+        frame = np.zeros((2000, 3000, 3), np.uint8)
+        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), \
+             patch.object(self.manager, '_new_session', return_value=session) as created:
+            self.manager.validate(LARGE, execution_mode='gpu')
+            depth = self.manager.predict(frame, LARGE, input_size=518, execution_mode='gpu')
+
+        self.assertEqual(depth.shape, frame.shape[:2])
+        self.assertEqual(created.call_args.kwargs['provider'], 'DmlExecutionProvider')
+        self.assertLessEqual(max(session.blob.shape[2:]), 518)
+        self.assertEqual(self.manager.execution_info()['active_provider'], 'DmlExecutionProvider')
+        self.assertEqual(self.manager.execution_info()['input_size_limit'], 518)
+        self.assertIsNone(self.manager.execution_info()['fallback_reason'])
+
+    def test_large_auto_falls_back_to_cpu_after_gpu_memory_failure(self):
+        self.accepted(LARGE)
+        def create(path, **options):
+            if options.get('provider') == 'DmlExecutionProvider':
+                raise RuntimeError('DML out of memory')
+            return FakeSession()
+
+        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), \
+             patch.object(self.manager, '_new_session', side_effect=create) as created:
+            self.manager.predict(np.zeros((8, 8, 3), np.uint8), LARGE, execution_mode='auto')
+
+        self.assertEqual(created.call_count, 2)
+        self.assertEqual(self.manager.execution_info()['active_provider'], 'CPUExecutionProvider')
+        self.assertIn('out of memory', self.manager.execution_info()['fallback_reason'])
+
+    def test_lower_input_detail_retries_large_on_gpu_after_memory_failure(self):
+        self.accepted(LARGE)
+
+        class SizeLimitedSession(FakeSession):
+            def __init__(self):
+                super().__init__(provider='DmlExecutionProvider')
+
+            def run(self, outputs, inputs):
+                self.blob = inputs['pixel_values']
+                if max(self.blob.shape[2:]) > 256:
+                    raise RuntimeError('DML out of memory')
+                return [self.prediction]
+
+        providers = []
+        def create(path, **options):
+            provider = options.get('provider', 'CPUExecutionProvider')
+            providers.append(provider)
+            return SizeLimitedSession() if provider == 'DmlExecutionProvider' else FakeSession()
+
+        frame = np.zeros((8, 8, 3), np.uint8)
+        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), \
+             patch.object(self.manager, '_new_session', side_effect=create):
+            self.manager.predict(frame, LARGE, input_size=518, execution_mode='auto')
+            self.assertEqual(self.manager.execution_info()['active_provider'], 'CPUExecutionProvider')
+            self.manager.predict(frame, LARGE, input_size=256, execution_mode='auto')
+
+        self.assertEqual(providers, ['DmlExecutionProvider', 'CPUExecutionProvider', 'DmlExecutionProvider'])
+        self.assertEqual(self.manager.execution_info()['active_provider'], 'DmlExecutionProvider')
 
     def test_gpu_failure_auto_falls_back_and_is_not_retried_per_frame(self):
         self.accepted(SMALL)

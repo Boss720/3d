@@ -70,12 +70,13 @@
   function selectedModel() { return models.find((model) => model.id === ui.depthMode.value); }
   function limitedGpu() { return (runtime?.adapters || []).some((adapter) => (/nvidia|1650/i.test(adapter.name || "") || Number(adapter.vendor_id) === 4318) && Number(adapter.memory_mb) > 0 && Number(adapter.memory_mb) <= 4096); }
   function largeOnLimitedGpu() { return ui.depthMode.value === "depth-anything-v2-large" && limitedGpu(); }
+  function largeGpuPolicyAvailable() { return typeof runtime?.gpu_memory_policy === "string" && runtime.gpu_memory_policy.includes("all named models may try DirectML"); }
   function gpuBlock() {
     if (ui.executionMode.value !== "gpu") return "";
     if (["balanced", "precision"].includes(ui.depthMode.value)) return "GPU inference requires a named neural model. Choose Auto or CPU only for visual approximation or custom ONNX.";
     if (!runtime) return "Checking NVIDIA GPU support…";
     if (!runtime.gpu_available) return "NVIDIA GPU is unavailable. Run .\\setup-gpu.ps1 to prepare the separate .venv-gpu environment, then start it with .\\run.ps1. Or choose Auto or CPU only.";
-    if (largeOnLimitedGpu()) return "Large exceeds the 4 GB GPU budget. Choose Small or Base, or choose Auto, hybrid or CPU only to run Large on CPU.";
+    if (largeOnLimitedGpu() && !largeGpuPolicyAvailable()) return "This server still routes Large to CPU on 4 GB GPUs. Restart after active conversions finish to enable its GPU path.";
     return "";
   }
   function executionSummary(execution, pipeline) {
@@ -91,7 +92,12 @@
     if (["balanced", "precision"].includes(ui.depthMode.value)) { ui.executionNote.textContent = ui.depthMode.value === "balanced" ? "Visual approximation uses CPU image cues. Choose a named neural depth engine to use GPU depth estimation." : "Custom ONNX models use CPU in this studio. Choose a named neural depth engine to use GPU depth estimation."; return; }
     if (mode === "cpu") { ui.executionNote.textContent = "CPU depth estimation and media processing. GPU is not requested."; return; }
     if (!runtime) { ui.executionNote.textContent = "Checking local GPU support…"; return; }
-    if (largeOnLimitedGpu()) { ui.executionNote.textContent = "Large will use CPU on this 4 GB GPU. Select Small for GPU depth estimation."; return; }
+    if (largeOnLimitedGpu()) {
+      ui.executionNote.textContent = largeGpuPolicyAvailable()
+        ? "Large will try DirectML on this 4 GB-class GPU with a 518 px long-side cap. Start at 256 px detail to reduce memory use. Auto/Hybrid fall back to CPU if GPU inference fails; GPU-only reports the error."
+        : "This server still routes Large to CPU on 4 GB GPUs. Restart after active conversions finish to enable its GPU path.";
+      return;
+    }
     if (!runtime.gpu_available) { ui.executionNote.textContent = `CPU fallback: ${runtime.error || "no compatible GPU runtime and NVIDIA adapter detected"}. Optional GPU setup: .\\setup-gpu.ps1 (separate .venv-gpu), then .\\run.ps1.`; return; }
     ui.executionNote.textContent = `${runtime.gpu_name || "NVIDIA GPU"} available${runtime.gpu_verified ? " · inference verified" : " · inference not yet verified"}. ${mode === "gpu" ? "GPU requested; failures will be reported." : "GPU depth with CPU media processing; CPU fallback if needed."}`;
   }

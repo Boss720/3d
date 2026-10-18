@@ -49,11 +49,14 @@ Processing device choices:
 - **CPU only** uses CPU inference and sequential media processing.
 
 Only one model/session is resident in each server, with a single inference call at
-a time. GPU input dimensions are capped at 924 pixels on the longer side. Small is
-the recommended 4 GB model. Large is routed to CPU on adapters with 4 GB or less,
-and explicit GPU mode rejects it. Base/MiDaS may still exceed available memory;
-Auto/hybrid can fall back. DirectML has no configured hard VRAM cap, so this is a
-best-effort memory policy. Approximation and custom ONNX remain CPU engines.
+a time. All built-in named models can attempt DirectML, including Large on a 4 GB
+card. GPU input dimensions are normally capped at 924 pixels on the longer side;
+Large is capped at 518 pixels on adapters with 4 GB or less to reduce its activation
+memory. Start Large at 256 px neural detail and close other GPU-heavy apps. VRAM use
+remains best effort because DirectML has no hard memory cap. Auto/Hybrid automatically
+retry on CPU if a GPU session or inference fails; explicit NVIDIA GPU mode reports
+the failure. Small remains the recommended 4 GB model for speed. Approximation and
+custom ONNX remain CPU engines.
 
 The pipeline overlaps different stages, rather than running duplicate CPU/GPU
 depth predictions. Decoder/inference callbacks finish their current operation on
@@ -114,7 +117,7 @@ Media stays on the local server. Only model installation contacts Hugging Face. 
 |---|---:|---|---|
 | Depth Anything V2 Small | 99 MB | Apache-2.0 | CPU/DirectML GPU; recommended for 4 GB cards |
 | Depth Anything V2 Base | 389 MB | CC-BY-NC-4.0 | CPU/DirectML GPU; non-commercial weights |
-| Depth Anything V2 Large | 1.34 GB | CC-BY-NC-4.0 | CPU on 4 GB cards; high memory use |
+| Depth Anything V2 Large | 1.34 GB | CC-BY-NC-4.0 | DirectML attempted at 4 GB with 518 px cap; Auto/Hybrid can fall back to CPU |
 | DPT Hybrid / MiDaS | 533 MB | Apache-2.0, Intel upstream | CPU/DirectML GPU; 384 px inference |
 | Custom ONNX | Your file | Your model's license | OpenCV DNN CPU |
 | Visual approximation | None | App code | Image cues; **not neural AI depth** |
