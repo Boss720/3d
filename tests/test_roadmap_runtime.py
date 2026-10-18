@@ -90,7 +90,12 @@ class RoadmapRuntimeTests(unittest.TestCase):
             states_at_preflight.append(job.state)
             return {'estimate_is_guarantee': False}
 
-        with patch.object(main, 'JOBS', {job.id: job}), patch.object(main.PREVIEW_CACHE, 'lock', ObservedGate()), patch.object(main, 'OUTPUTS', self.folder), patch.object(main, 'inspect_media', side_effect=preflight) as inspected, patch.object(main.DEPTH_ENGINE, 'validate') as validated, patch.object(main, 'run_image', return_value=self.folder / 'output.png'):
+        def convert(actual_job, _net):
+            target = main.output_path_for(actual_job)
+            target.write_bytes(b'owned mock output')
+            return target
+
+        with patch.object(main, 'JOBS', {job.id: job}), patch.object(main.PREVIEW_CACHE, 'lock', ObservedGate()), patch.object(main, 'OUTPUTS', self.folder), patch.object(main, 'inspect_media', side_effect=preflight) as inspected, patch.object(main.DEPTH_ENGINE, 'validate') as validated, patch.object(main, 'run_image', side_effect=convert):
             runner = threading.Thread(target=main.process_job, args=(job.id,), name='roadmap-test-export')
             try:
                 with gate:

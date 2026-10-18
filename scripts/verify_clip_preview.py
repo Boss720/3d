@@ -116,6 +116,23 @@ def compare_decoded_frames(reference: np.ndarray, candidate: np.ndarray, device:
             "value_count": int(diff.size), "policy": policy}
 
 
+def classify_pixel_gate(self_variation: dict, comparison: dict, repeat_comparison: dict) -> dict:
+    if not self_variation["passed"]:
+        return {"status": "inconclusive",
+                "reason": "Ordinary GPU export self-repeat exceeds the unchanged strict pixel policy.",
+                "clip_matches_repeat_export": repeat_comparison["passed"]}
+    if not comparison["passed"] or not repeat_comparison["passed"]:
+        return {"status": "failed",
+                "reason": "Processed clip differs from a stable ordinary-export reference.",
+                "clip_matches_repeat_export": repeat_comparison["passed"]}
+    return {"status": "passed", "clip_matches_repeat_export": repeat_comparison["passed"]}
+
+
+def require_pixel_gate_passed(conclusion: dict) -> None:
+    if conclusion["status"] != "passed":
+        raise RuntimeError(f"Pixel gate {conclusion['status']}: {conclusion.get('reason')}")
+
+
 def cancellation_progress_reached(job: dict, minimum_frames: int = 2) -> bool:
     try:
         return job.get("state") == "processing" and int(job.get("frames_processed", 0)) >= minimum_frames
@@ -201,6 +218,14 @@ def check_execution(execution: dict, device: str) -> dict:
     return execution
 
 
+def require_export_execution(job: dict, device: str) -> dict:
+    if not isinstance(job, dict) or not job:
+        raise RuntimeError("Ordinary export public job is missing; execution cannot be verified.")
+    if job.get("purpose") != "export" or job.get("execution_mode") != device:
+        raise RuntimeError(f"Ordinary export purpose/device mismatch: {job}")
+    return check_execution(job.get("execution", {}), device)
+
+
 def wait_for_job(api: LocalAPI, job_id: str, report: dict, folder: Path,
                  label: str, cancel: bool = False) -> dict:
     deadline, saved, printed, cancel_sent = time.monotonic() + TIMEOUT, 0, 0, False
@@ -261,11 +286,8 @@ def run_export(api: LocalAPI, report: dict, folder: Path, label: str, source: Pa
     record["server_resources_after"] = api.resources()
     job = next((j for j in api.jobs() if isinstance(j, dict) and j.get("id") == result.get("job_id")), {})
     record["public_job"] = job
-    if job:
-        if job.get("purpose") != "export" or job.get("execution_mode") != device:
-            raise RuntimeError(f"Ordinary export purpose/device mismatch: {job}")
-        if result.get("success"):
-            record["actual_execution"] = check_execution(job.get("execution", {}), device)
+    if result.get("success"):
+        record["actual_execution"] = require_export_execution(job, device)
     output = work / f"{label}-run-1-output.mp4"
     if output.exists():
         record["output_path"], record["output_sha256"] = str(output), sha256_file(output)
@@ -494,29 +516,13 @@ def run(args) -> int:
         report["ordinary_export_repeat_comparison"] = self_variation
         report["matched_output_comparison"] = comparison
         report["matched_output_repeat_comparison"] = repeat_comparison
-        if not self_variation["passed"]:
-            report["pixel_gate_conclusion"] = {
-                "status": "inconclusive",
-                "reason": "Ordinary GPU export self-repeat exceeds the unchanged strict pixel policy.",
-                "clip_matches_repeat_export": repeat_comparison["passed"],
-            }
-        elif not comparison["passed"]:
-            report["pixel_gate_conclusion"] = {
-                "status": "failed",
-                "reason": "Processed clip differs from a stable ordinary-export reference.",
-                "clip_matches_repeat_export": repeat_comparison["passed"],
-            }
-        else:
-            report["pixel_gate_conclusion"] = {"status": "passed", "clip_matches_repeat_export": repeat_comparison["passed"]}
+        report["pixel_gate_conclusion"] = classify_pixel_gate(self_variation, comparison, repeat_comparison)
         write_report(folder, report)
 
         cancel_fields = settings_for(args.device, "preview_clip")
         cancel_fields.update({"clip_start_seconds": 9, "clip_duration_seconds": 3})
         canceled = run_cancel_inference(api, report, folder, SOURCE, cancel_fields, raw_bounds)
-        if not self_variation["passed"]:
-            raise RuntimeError(f"GPU pixel gate inconclusive because ordinary-export self-repeat exceeds policy: {self_variation}")
-        if not comparison["passed"]:
-            raise RuntimeError(f"Matched proxy comparison failed after ordinary-export self-repeat: {comparison}")
+        require_pixel_gate_passed(report["pixel_gate_conclusion"])
         report.update({"status": "passed", "completed_at_utc": datetime.now(timezone.utc).isoformat(),
             "summary": {"full_source_export": "passed", "processed_clip": "passed",
             "matched_proxy_export": "passed", "matched_proxy_repeat": "passed",

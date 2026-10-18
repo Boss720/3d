@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,7 @@ from starlette.concurrency import run_in_threadpool
 from depth_engine import ModelManager
 from depth_engine import MODEL_SPECS
 from job_queue import EditableJobQueue
+from job_history import HistoryStore, HistoryUnavailable, HistoryCapacityError, HistoryConflict
 from job_settings import SETTINGS_SCHEMA_VERSION, settings_snapshot, validate_settings
 from output_naming import (DEFAULT_OUTPUT_NAME_TEMPLATE, MAX_TEMPLATE_LENGTH, NAMING_FIELDS,
                            NAMING_SCHEMA_VERSION, render_output_name, validate_output_template)
@@ -114,7 +116,7 @@ FFMPEG_PATH = find_ffmpeg()
 _SOURCE_COMPONENTS = ('main.py', 'depth_engine.py', 'stereo.py', 'video_encoder.py',
                       'video_pipeline.py', 'preview_cache.py', 'telemetry.py', 'preflight.py',
                       'calibration.py', 'resource_sampling.py', 'preview_policy.py', 'preview_clip.py',
-                      'job_queue.py', 'job_settings.py', 'output_naming.py')
+                      'job_queue.py', 'job_settings.py', 'output_naming.py', 'job_history.py')
 APP_BUILD_FINGERPRINT = (hashlib.sha256(b''.join((ROOT / name).read_bytes() for name in _SOURCE_COMPONENTS)).hexdigest()
                          if all((ROOT / name).is_file() for name in _SOURCE_COMPONENTS) else None)
 JOBS: dict[str, "Job"] = {}
@@ -122,6 +124,10 @@ JOBS_LOCK = threading.RLock()
 JOB_QUEUE = EditableJobQueue()
 WORKER: threading.Thread | None = None
 WORKER_START_LOCK = threading.Lock()
+WORKER_STOP = threading.Event()
+ACCEPTING_MUTATIONS = True
+HISTORY: HistoryStore | None = None
+HISTORY_WARNING: str | None = None
 
 
 @dataclass
@@ -170,6 +176,8 @@ class Job:
     preview_source_path: Path | None = None
     clip: dict[str, Any] | None = None
     output_name_template: str = DEFAULT_OUTPUT_NAME_TEMPLATE
+    history_admitted: bool = False
+    history_warning: str | None = None
 
     def public(self, queue_position: int | None = None) -> dict[str, Any]:
         elapsed_seconds = None
@@ -253,6 +261,7 @@ class Job:
             "progress": self.progress,
             "message": self.message,
             "error": self.error,
+            "history_warning": self.history_warning,
             "output_name": self.output_path.name if self.output_path else None,
             "created_at": self.created_at,
             "depth_mode": self.depth_mode,
@@ -676,6 +685,7 @@ def process_job(job_id: str) -> None:
     if not job:
         return
     if job.cancel_event.is_set():
+        save_history_boundary(job, 'finish', 'canceled')
         set_job(job_id, state="canceled", message="Canceled before processing")
         job.input_path.unlink(missing_ok=True)
         return
@@ -685,6 +695,7 @@ def process_job(job_id: str) -> None:
     # Finish an already admitted preview before reserving inference for export.
     # New preview misses see processing under the same gate and cannot jump ahead.
     with PREVIEW_CACHE.lock:
+        save_history_boundary(job, 'mark_processing')
         set_job(job_id, state="processing", phase="initialization", progress=1, message="Preparing local depth engine",
                 processing_started_monotonic=time.monotonic(), processing_finished_monotonic=None)
     try:
@@ -741,16 +752,27 @@ def process_job(job_id: str) -> None:
         if job.cancel_event.is_set():
             target.unlink(missing_ok=True)
             raise JobCancelled()
+        if (target != output_path_for(job) or target.is_symlink()
+                or target.parent.resolve() != OUTPUTS.resolve() or not target.is_file()
+                or target.stat().st_size <= 0):
+            raise RuntimeError('The converter did not produce a nonempty owned output.')
+        save_history_boundary(job, 'finish', 'completed',
+                              output={'name': target.name, 'size_bytes': target.stat().st_size},
+                              execution=job.execution, encoder=job.encoder, timings=job.timings.snapshot())
         set_job(job_id, state="completed", phase="complete", progress=100, output_path=target, process=None,
                 processing_finished_monotonic=time.monotonic(),
                 message="Processed clip ready" if job.purpose == 'preview_clip' else "Stereo export ready")
     except (JobCancelled, ClipCancelled):
         if target_owned:
             target.unlink(missing_ok=True)
+        save_history_boundary(job, 'finish', 'canceled')
         set_job(job_id, state="canceled", phase="canceled", process=None, processing_finished_monotonic=time.monotonic(), message="Conversion canceled")
     except Exception as exc:  # Surface local decoder/encoder/model errors in the queue.
         if target_owned:
             target.unlink(missing_ok=True)
+        # Bound persisted error text independently from the live diagnostic.
+        error = re.sub(r'[\x00-\x1f\x7f]', ' ', str(exc))[:4096] or 'Conversion failed'
+        save_history_boundary(job, 'finish', 'failed', error=error)
         set_job(job_id, state="failed", phase="failed", process=None, processing_finished_monotonic=time.monotonic(), error=str(exc), message="Conversion failed")
     finally:
         if job.preview_source_path:
@@ -763,8 +785,15 @@ def process_job(job_id: str) -> None:
 
 
 def worker_loop() -> None:
-    while True:
-        job_id = JOB_QUEUE.get()
+    while not WORKER_STOP.is_set():
+        # Share Queue's condition so shutdown can wake an idle worker without
+        # consuming or moving any queued export.
+        with JOB_QUEUE.not_empty:
+            while not JOB_QUEUE.qsize() and not WORKER_STOP.is_set():
+                JOB_QUEUE.not_empty.wait()
+            if WORKER_STOP.is_set():
+                return
+            job_id = JOB_QUEUE.get_nowait()
         try:
             process_job(job_id)
         finally:
@@ -776,12 +805,88 @@ def ensure_worker() -> None:
     # Independent from queue/job locks: concurrent uploads must not create two
     # consumers while the first thread has been created but has not started yet.
     with WORKER_START_LOCK:
+        if WORKER_STOP.is_set() or not ACCEPTING_MUTATIONS:
+            return
         if WORKER is None or not WORKER.is_alive():
             WORKER = threading.Thread(target=worker_loop, daemon=True, name="stereolab-worker")
             WORKER.start()
 
 
-app = FastAPI(title="StereoLab", docs_url=None, redoc_url=None)
+def history_capabilities() -> dict[str, Any]:
+    result = (HISTORY or HistoryStore(DATA_ROOT)).status()
+    if HISTORY_WARNING and result['enabled']:
+        result.update(state='degraded', warning=HISTORY_WARNING)
+    return result
+
+
+def history_failure(job: Job | None = None) -> None:
+    global HISTORY_WARNING
+    HISTORY_WARNING = 'History was not saved. Account for current outputs, check local storage, then restart to recover history.'
+    if HISTORY is not None:
+        HISTORY.mark_degraded()
+    if job is not None:
+        job.history_warning = HISTORY_WARNING
+
+
+def save_history_boundary(job: Job, method: str, *args, required=False, **kwargs) -> None:
+    if not job.history_admitted or HISTORY is None:
+        return
+    try:
+        getattr(HISTORY, method)(job.id, *args, **kwargs)
+    except (HistoryUnavailable, HistoryConflict, HistoryCapacityError, ValueError, OSError):
+        history_failure(job)
+        if required:
+            raise HTTPException(status_code=503, detail=HISTORY_WARNING)
+
+
+def require_history_admission() -> None:
+    if HISTORY is None or not HISTORY.enabled:
+        return
+    try:
+        HISTORY.check_capacity()
+    except HistoryCapacityError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except HistoryUnavailable as exc:
+        history_failure()
+        raise HTTPException(status_code=503, detail=HISTORY_WARNING) from exc
+
+
+@asynccontextmanager
+async def application_lifespan(app):
+    global HISTORY, HISTORY_WARNING, ACCEPTING_MUTATIONS, WORKER
+    # Configuration and lease acquisition precede worker creation or serving.
+    store = HistoryStore.from_environment(DATA_ROOT)
+    store.open()
+    HISTORY, HISTORY_WARNING = store, None
+    ACCEPTING_MUTATIONS = True
+    WORKER_STOP.clear()
+    try:
+        ensure_worker()
+        yield
+    finally:
+        with WORKER_START_LOCK:
+            ACCEPTING_MUTATIONS = False
+            WORKER_STOP.set()
+        with JOB_QUEUE.not_empty:
+            JOB_QUEUE.not_empty.notify_all()
+        with JOB_QUEUE.lock, JOBS_LOCK:
+            active = [job for job in JOBS.values() if job.state == 'processing'
+                      or (WORKER is not None and job.state == 'queued' and job.id not in JOB_QUEUE.pending_ids())]
+            for job in active:
+                job.cancel_event.set()
+            processes = [job.process for job in active]
+        for process in processes:
+            await run_in_threadpool(stop_process, process)
+        worker = WORKER
+        if worker is not None:
+            # No timeout may release the lease beneath a live writer.
+            await run_in_threadpool(worker.join)
+        store.close()
+        HISTORY = None
+        WORKER = None
+
+
+app = FastAPI(title="StereoLab", docs_url=None, redoc_url=None, lifespan=application_lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -817,6 +922,8 @@ async def local_api_boundary(request: Request, call_next):
                             request.headers.get('origin'), request.headers.get('sec-fetch-site'),
                             request.method not in {'GET', 'HEAD', 'OPTIONS'}):
         return JSONResponse(status_code=403, content={'detail': 'Use the local StereoLab page on this server to make changes.'})
+    if request.method not in {'GET', 'HEAD', 'OPTIONS'} and not ACCEPTING_MUTATIONS:
+        return JSONResponse(status_code=503, content={'detail': 'StereoLab is shutting down; new changes are no longer accepted.'})
     return await call_next(request)
 
 
@@ -835,6 +942,7 @@ def status() -> dict[str, Any]:
         "output_dir": str(OUTPUTS),
         "runtime": DEPTH_ENGINE.runtime_info(),
         "build_fingerprint": APP_BUILD_FINGERPRINT,
+        "history_capabilities": history_capabilities(),
         "preview_capabilities": {
             "schema_version": 1,
             "processed_clip": {"supported": True, "max_duration_seconds": 5,
@@ -1159,20 +1267,32 @@ async def create_job(
         await file.close()
         raise HTTPException(status_code=409, detail="FFmpeg is needed for video export. Install it or set VIDEO3D_FFMPEG.")
 
+    if purpose == 'export':
+        try:
+            require_history_admission()
+        except HTTPException:
+            await file.close()
+            raise
+
     job_id = str(uuid.uuid4())
     input_path = UPLOADS / f"{job_id}{extension}"
     total = 0
+    digest = hashlib.sha256()
+    staged_owned = False
     try:
-        with input_path.open("wb") as target:
+        with input_path.open("xb") as target:
+            staged_owned = True
             while chunk := await file.read(1024 * 1024):
                 total += len(chunk)
+                digest.update(chunk)
                 if total > MAX_UPLOAD_BYTES:
                     target.close()
                     input_path.unlink(missing_ok=True)
                     raise HTTPException(status_code=413, detail="The media file is larger than 8 GB.")
                 target.write(chunk)
     except Exception:
-        input_path.unlink(missing_ok=True)
+        if staged_owned:
+            input_path.unlink(missing_ok=True)
         raise
     finally:
         await file.close()
@@ -1199,9 +1319,32 @@ async def create_job(
         clip_duration_seconds=clip_duration_seconds,
         output_name_template=output_name_template,
     )
-    with JOB_QUEUE.lock, JOBS_LOCK:
-        JOBS[job_id] = job
-        JOB_QUEUE.put(job_id)
+    try:
+        with JOB_QUEUE.lock, JOBS_LOCK:
+            if not ACCEPTING_MUTATIONS:
+                raise HTTPException(status_code=503, detail='StereoLab is shutting down.')
+            if purpose == 'export' and HISTORY is not None and HISTORY.enabled:
+                HISTORY.admit(dict(job_id=job.id, created_at=job.created_at, filename=job.filename,
+                                   media_type=job.media_type, source_size_bytes=total,
+                                   source_sha256=digest.hexdigest(), settings=settings_snapshot(job),
+                                   output_name_template=job.output_name_template,
+                                   build_fingerprint=APP_BUILD_FINGERPRINT))
+                job.history_admitted = True
+            JOBS[job_id] = job
+            JOB_QUEUE.put(job_id)
+    except HistoryCapacityError as exc:
+        input_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except HistoryUnavailable as exc:
+        input_path.unlink(missing_ok=True)
+        history_failure()
+        raise HTTPException(status_code=503, detail=HISTORY_WARNING) from exc
+    except ValueError as exc:
+        input_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        input_path.unlink(missing_ok=True)
+        raise
     ensure_worker()
     with JOB_QUEUE.lock, JOBS_LOCK:
         return public_job_locked(job)
@@ -1246,6 +1389,7 @@ def edit_queued_settings(job_id: str, body: Any = Body(...)) -> dict[str, Any]:
     validate_depth_mode(settings['depth_mode'], settings['execution_mode'])
     with JOB_QUEUE.lock, JOBS_LOCK:
         job = pending_export_locked(job_id)
+        save_history_boundary(job, 'edit_pending', settings=settings, required=True)
         for name, value in settings.items():
             setattr(job, name, value)
         return public_job_locked(job)
@@ -1261,6 +1405,7 @@ def edit_queued_naming(job_id: str, body: Any = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     with JOB_QUEUE.lock, JOBS_LOCK:
         job = pending_export_locked(job_id)
+        save_history_boundary(job, 'edit_pending', output_name_template=template, required=True)
         job.output_name_template = template
         return public_job_locked(job)
 
@@ -1275,6 +1420,8 @@ def remove_queued_job(job_id: str) -> dict[str, Any]:
                 path.unlink(missing_ok=True)
             except OSError as exc:
                 raise HTTPException(status_code=409, detail='The queued upload could not be removed. Check file permissions and retry.') from exc
+        # Cancellation remains available when durable storage has failed.
+        save_history_boundary(job, 'finish', 'canceled')
         JOB_QUEUE.remove_pending(job.id)
         job.cancel_event.set()
         job.state, job.phase, job.message = 'canceled', 'canceled', 'Removed from the local queue'
@@ -1306,6 +1453,37 @@ def download_job(job_id: str) -> FileResponse:
         output = job.output_path if job else None
     if output is None or not output.is_file() or output.parent.resolve() != OUTPUTS.resolve():
         raise HTTPException(status_code=404, detail="Completed output was not found.")
+    return FileResponse(output, filename=output.name)
+
+
+@app.get('/api/history')
+def get_history(limit: str = '50', before: str | None = None) -> dict[str, Any]:
+    if HISTORY is None or not HISTORY.enabled:
+        raise HTTPException(status_code=409, detail='History is disabled for this server instance.')
+    try:
+        if re.fullmatch(r'[0-9]{1,3}', limit) is None:
+            raise ValueError('History page limit must be an integer from 1 to 100.')
+        return HISTORY.list_prior(limit=int(limit), before=before)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HistoryUnavailable as exc:
+        history_failure()
+        raise HTTPException(status_code=503, detail=HISTORY_WARNING) from exc
+
+
+@app.get('/api/history/{job_id}/download')
+def download_history(job_id: str) -> FileResponse:
+    if HISTORY is None or not HISTORY.enabled:
+        raise HTTPException(status_code=409, detail='History is disabled for this server instance.')
+    try:
+        output = HISTORY.lookup_output(job_id)
+    except ValueError:
+        output = None
+    except HistoryUnavailable as exc:
+        history_failure()
+        raise HTTPException(status_code=503, detail=HISTORY_WARNING) from exc
+    if output is None or output.parent.resolve() != OUTPUTS.resolve():
+        raise HTTPException(status_code=404, detail='Saved output is unavailable.')
     return FileResponse(output, filename=output.name)
 
 

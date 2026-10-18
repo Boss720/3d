@@ -1,6 +1,8 @@
 # StereoLab development roadmap
 
-Prepared 18 October 2026 against commit `0c08d1a`.
+Prepared 18 October 2026 against commit `0c08d1a`; reconciled through the
+Phase 4.1 integration and GPU consistency follow-up on top of `20709ff`
+(currently uncommitted).
 
 ## Execution status — 18 October 2026
 
@@ -18,10 +20,10 @@ finished. See PROGRESS.md and HANDOFF.md for dated commands, reports and limitat
 | 1.4 | Recent-frame estimate/range, phased finalization, encoder-restart reason and deterministic tests | Comparable-history queue estimates remain deferred |
 | 2.1 | Motion-aligned history prototype and matched synthetic clips evaluated, not adopted | No consistent improvement demonstrated; raw-scale normalization remains unsolved |
 | 2.2 | Visibility-order prototype with hole masks and matched fixtures evaluated, not adopted | Large CPU cost and no real-video superiority established |
-| 3.1 | Exact-frame Source/Depth split, bounded zoom/pan, bounded full-detail stills and 1–5s processed proxy clips using export settings; 320/375/768px embedded CSS viewport checks | GPU pixel gate still inconclusive; stage diagnostic found first-frame raw-model variation in one Small session, fixed-input encoder pairs exact; deeper stereo-run A/B, real footage and physical-device/display review |
+| 3.1 | Exact-frame Source/Depth split, zoom/pan, full-detail stills and processed clips. Corrected strict verifier requires all three pair comparisons and public execution proof; fresh isolated GPU API run passed with all 36 decoded frames identical. Exact-input diagnostics isolate repeat drift after preprocessing; a single warmup does not ensure repeatability | Original failed GPU run remains preserved; intermittent raw-output variance and codec amplification need further investigation. Real footage, deeper stereo A/B and physical-device/display review remain open |
 | 3.2 | Four exact performance presets, reset/dirty state, strict versioned JSON import/export | Broader accessibility and real-device validation |
 | 3.3 | Atomic pending-export reorder/remove/settings/naming, immutable snapshots, ready-file order/batch settings and names, source-aware retry/duplicate, per-file frozen readiness, tab-only notification opt-in and guarded keyboard shortcuts | Real browser/OS notification delivery and broader accessibility/device review; durable retry sources remain Phase 4 |
-| 4.1 | Standalone metadata-only SQLite store with Windows lease, crash, rollback, corruption and hardlink tests; not imported by the app | Server lifecycle/hash/admission integration, read-only history API/UI and isolated restart/download acceptance; real symlink and POSIX execution proof |
+| 4.1 | Opt-in metadata history integrated: worker/lease lifespan, streamed source hashes, durable admission/edits/lifecycle, prior-launch API/UI and downloads. Isolated Windows CPU restart, pending interruption, identical download bytes and second-owner rejection passed; settings reuse and narrow-width UI checked | Real symlink and POSIX execution proof; broader real-media/device validation. Project records, retained sources and actual recovery remain separate work |
 | Delivery API review | Loopback Host validation and same-service browser write-origin checks, CLI access retained | This local boundary is not public deployment authentication |
 
 Quality prototypes are reproducible experiments outside the supported app path.

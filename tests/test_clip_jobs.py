@@ -96,6 +96,7 @@ class ClipJobTests(unittest.TestCase):
             target.write_bytes(b'output')
             return target
         with patch.dict(main.JOBS, {job.id: job}), patch.object(main, 'CLIP_PROXIES', self.root / 'proxies'), \
+             patch.object(main, 'OUTPUTS', self.root), \
              patch.object(main, 'output_path_for', return_value=target), \
              patch.object(main, 'inspect_media', side_effect=[report, {**report, 'total_frames': 36}]), \
              patch.object(main, 'prepare_preview_clip', side_effect=prepare), \

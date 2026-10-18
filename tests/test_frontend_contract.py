@@ -545,5 +545,38 @@ assert.equal(contract.sourceDepthCompareAvailable({ source: 'blob:live-video', d
 assert.equal(contract.sourceDepthCompareAvailable({ source: 'data:image/png;base64,abc', depth: '' }), false);
 """)
 
+    def test_history_capability_gates_old_disabled_and_degraded_servers(self):
+        self.run_contract("""
+assert.equal(contract.historyCapability({}), null);
+const base = { schema_version: 1, supported: true, enabled: true, state: 'ready', records_limit: 1000, source_retention: false, automatic_requeue: false, frame_resume: false, instance_name: 'desktop', warning: null };
+assert.equal(contract.historyCapability({ history_capabilities: base }).enabled, true);
+assert.equal(contract.historyCapability({ history_capabilities: { ...base, enabled: false, state: 'disabled', instance_name: null } }).enabled, false);
+assert.equal(contract.historyCapability({ history_capabilities: { ...base, state: 'degraded', warning: 'Check history storage.' } }).state, 'degraded');
+assert.equal(contract.historyCapability({ history_capabilities: { ...base, schema_version: 2 } }), null);
+assert.equal(contract.historyCapability({ history_capabilities: { ...base, enabled: false } }), null);
+assert.equal(contract.historyCapability({ history_capabilities: { ...base, automatic_requeue: true } }), null);
+""")
+
+    def test_history_page_validates_readonly_records_and_preserves_interrupted_truth(self):
+        self.run_contract("""
+const item = {
+  job_id: '2f17db52-3cf6-4c92-94df-93bf04c0cc17', created_at: 1792300000, updated_at: 1792300100, completed_at: null,
+  state: 'interrupted', last_known_state: 'processing', filename: 'scene & take.mp4', media_type: 'video',
+  source_size_bytes: 1234, source_sha256: 'a'.repeat(64), settings_schema_version: 1, naming_schema_version: 1,
+  settings: contract.performancePreset('balanced'), output_name_template: '{name}_{layout}',
+  planned_output_name: 'scene_sbs.mp4', output_name: null, output_available: false,
+  readonly: true, source_available: false, requires_source_reselection: true
+};
+const page = contract.validateHistoryPage({ schema_version: 1, items: [item], next_cursor: 'opaque_cursor', invalid_records: 2 });
+assert.equal(page.items[0].filename, 'scene & take.mp4');
+assert.equal(contract.historyStateLabel(page.items[0]), 'Interrupted');
+assert.match(contract.historyStateLabel({ state: 'completed' }), /Completed/);
+assert.throws(() => contract.validateHistoryPage({ schema_version: 2, items: [], next_cursor: null, invalid_records: 0 }), /schema/);
+assert.throws(() => contract.validateHistoryPage({ schema_version: 1, items: [ { ...item, source_available: true } ], next_cursor: null, invalid_records: 0 }), /read-only/);
+assert.throws(() => contract.validateHistoryPage({ schema_version: 1, items: [ { ...item, settings: { ...item.settings, layout: 'evil' } } ], next_cursor: null, invalid_records: 0 }), /layout/);
+assert.throws(() => contract.validateHistoryPage({ schema_version: 1, items: [ { ...item, state: 'interrupted', last_known_state: null } ], next_cursor: null, invalid_records: 0 }), /last-known/);
+assert.throws(() => contract.validateHistoryPage({ schema_version: 1, items: [], next_cursor: '../escape', invalid_records: 0 }), /cursor/);
+""")
+
 if __name__ == "__main__":
     unittest.main()

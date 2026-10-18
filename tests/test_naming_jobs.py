@@ -20,7 +20,9 @@ class NamingJobTests(unittest.TestCase):
         self.outputs.mkdir()
         self.addCleanup(self.cleanup)
         for name, value in (('JOBS', {}), ('JOB_QUEUE', type(main.JOB_QUEUE)()),
-                            ('UPLOADS', self.uploads), ('OUTPUTS', self.outputs)):
+                            ('UPLOADS', self.uploads), ('OUTPUTS', self.outputs),
+                            ('ACCEPTING_MUTATIONS', True), ('WORKER_STOP', threading.Event()),
+                            ('WORKER', None), ('HISTORY', None)):
             context = patch.object(main, name, value)
             context.start()
             self.addCleanup(context.stop)
@@ -201,7 +203,9 @@ class NamingJobTests(unittest.TestCase):
     def test_surrogate_naming_json_rejects_before_mutation_and_valid_astral_pair_is_accepted(self):
         public = self.submit().json()
         job = main.JOBS[public['id']]
-        with TestClient(main.app, base_url='http://127.0.0.1', raise_server_exceptions=False) as client:
+        # This validation test deliberately keeps its export pending; lifecycle
+        # startup must not introduce an inference worker into the fixture.
+        with patch.object(main, 'ensure_worker'), TestClient(main.app, base_url='http://127.0.0.1', raise_server_exceptions=False) as client:
             response = client.post(f'/api/jobs/{job.id}/naming',
                 content=r'{"output_name_template":"\ud800_{name}"}', headers={'Content-Type': 'application/json'})
             self.assertEqual(response.status_code, 400, response.text)

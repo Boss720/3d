@@ -208,6 +208,44 @@ const frontendContract = (() => {
     const caps = status?.queue_capabilities;
     return caps?.schema_version === 1 && caps.reorder_queued_exports === true && caps.edit_queued_exports === true && caps.remove_queued_exports === true && caps.settings_snapshot === true ? caps : null;
   }
+  function historyCapability(status) {
+    const caps = status?.history_capabilities;
+    if (!caps || caps.schema_version !== 1 || caps.supported !== true || typeof caps.enabled !== "boolean" ||
+        !["disabled", "ready", "degraded"].includes(caps.state) ||
+        (caps.enabled && caps.state === "disabled") || (!caps.enabled && caps.state !== "disabled") ||
+        caps.records_limit !== 1000 || caps.source_retention !== false || caps.automatic_requeue !== false || caps.frame_resume !== false) return null;
+    if (caps.instance_name != null && (typeof caps.instance_name !== "string" || !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(caps.instance_name))) return null;
+    if (caps.warning != null && typeof caps.warning !== "string") return null;
+    return caps;
+  }
+  function validateHistoryItem(item) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("History item must be an object.");
+    if (typeof item.job_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.job_id)) throw new Error("History job identity is invalid.");
+    for (const key of ["created_at", "updated_at"]) if (typeof item[key] !== "number" || !Number.isFinite(item[key]) || item[key] < 0) throw new Error(`History ${key} is invalid.`);
+    if (!["queued", "processing", "completed", "failed", "canceled", "interrupted"].includes(item.state)) throw new Error("History state is invalid.");
+    if (item.state === "completed" ? (typeof item.completed_at !== "number" || !Number.isFinite(item.completed_at) || item.completed_at < 0) : item.completed_at !== null) throw new Error("History completion timestamp is invalid.");
+    if (item.state === "interrupted" ? !["queued", "processing", "initializing", "preparing", "finalizing"].includes(item.last_known_state) : item.last_known_state !== null) throw new Error("History last-known state is invalid.");
+    validateOutputBasename(item.filename, "source filename");
+    if (typeof item.media_type !== "string" || !["image", "video"].includes(item.media_type)) throw new Error("History media type is invalid.");
+    if (!Number.isSafeInteger(item.source_size_bytes) || item.source_size_bytes < 0 || typeof item.source_sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(item.source_sha256)) throw new Error("History source details are invalid.");
+    if (item.settings_schema_version !== 1 || item.naming_schema_version !== 1) throw new Error("History settings schema is unsupported.");
+    const settings = validateSettings(item.settings);
+    validateOutputNameTemplate(item.output_name_template);
+    validateOutputBasename(item.planned_output_name, "planned output name");
+    if (item.output_name != null) validateOutputBasename(item.output_name, "output name");
+    if (typeof item.output_available !== "boolean" || typeof item.readonly !== "boolean" || typeof item.source_available !== "boolean" || typeof item.requires_source_reselection !== "boolean") throw new Error("History availability flags are invalid.");
+    if (item.readonly !== true || item.source_available !== false || item.requires_source_reselection !== true) throw new Error("History item is not a read-only prior launch record.");
+    if (item.output_available && (item.state !== "completed" || typeof item.output_name !== "string")) throw new Error("History output availability is inconsistent.");
+    return { ...item, settings };
+  }
+  function validateHistoryPage(page) {
+    if (!page || typeof page !== "object" || Array.isArray(page) || page.schema_version !== 1 || !Array.isArray(page.items)) throw new Error("History response schema is unsupported.");
+    if (page.next_cursor !== null && (typeof page.next_cursor !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(page.next_cursor))) throw new Error("History page cursor is invalid.");
+    if (!Number.isSafeInteger(page.invalid_records) || page.invalid_records < 0) throw new Error("History invalid-record count is invalid.");
+    if (page.items.length > 100) throw new Error("History page exceeds its limit.");
+    return { ...page, items: page.items.map(validateHistoryItem) };
+  }
+  function historyStateLabel(item) { return item?.state === "interrupted" ? "Interrupted" : ({ queued: "Queued when stopped", processing: "Processing when stopped", completed: "Completed", failed: "Failed", canceled: "Canceled" }[item?.state] || "Unavailable state"); }
   const defaultOutputNameTemplate = "{name}_{layout}", outputNameTemplateFields = ["name", "layout", "model", "date"], outputNameTemplateMaxLength = 120;
   function outputNamingCapability(status) {
     const caps = status?.naming_capabilities;
@@ -505,7 +543,7 @@ const frontendContract = (() => {
     const png = (value) => typeof value === "string" && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value);
     return Boolean(result && png(result.source) && png(result.depth));
   }
-  return Object.freeze({ capabilityV1, gpuPolicy, selectedGpuAdapter, retrySupported, retryGpu, effectiveQueueSettings, queueReadiness, fullStillEligibility, validatePreviewResponse, previewDimensionDetails, processedClipCapability, validProcessedClipDuration, processedClipUnavailableMessage, processedClipErrorAfterPoll, validatePreviewClipJob, isOrdinaryExportJob, completionNotificationStatus, observeCompletionNotice, keyboardShortcutAction, clipContextMatches, processedClipResponseAction, processedClipQuarantineAfterPoll, queueCapabilities, outputNamingCapability, validateOutputNameTemplate, validateOutputBasename, validateQueueJobNaming, validateQueueJobSnapshot, moveReadyQueueItem, moveQueuedExportIds, makeReadyQueueCopy, freezeReadyQueueItem, outputNameTemplateForSubmit, outputNameTemplateForSubmission, canSnapshotOutputNameTemplate, outputNameTemplateForQueueCopy, queuedNameUpdateRequest, queuePhaseLabel, previewClipDetails, previewExecutionDetails, preflightDetails, jobEtaLabel, performancePreset, validateSettings, validateUserPreset, exportUserPreset, hasUnsavedSettings, validateCalibrationReport, calibrationApplicable, calibrationDetails, calibrationStatusLabel, calibrationContextMatches, zoomPanGeometry, compareSplitPercent, sourceDepthCompareAvailable });
+  return Object.freeze({ capabilityV1, gpuPolicy, selectedGpuAdapter, retrySupported, retryGpu, effectiveQueueSettings, queueReadiness, fullStillEligibility, validatePreviewResponse, previewDimensionDetails, processedClipCapability, validProcessedClipDuration, processedClipUnavailableMessage, processedClipErrorAfterPoll, validatePreviewClipJob, isOrdinaryExportJob, completionNotificationStatus, observeCompletionNotice, keyboardShortcutAction, clipContextMatches, processedClipResponseAction, processedClipQuarantineAfterPoll, queueCapabilities, historyCapability, validateHistoryItem, validateHistoryPage, historyStateLabel, outputNamingCapability, validateOutputNameTemplate, validateOutputBasename, validateQueueJobNaming, validateQueueJobSnapshot, moveReadyQueueItem, moveQueuedExportIds, makeReadyQueueCopy, freezeReadyQueueItem, outputNameTemplateForSubmit, outputNameTemplateForSubmission, canSnapshotOutputNameTemplate, outputNameTemplateForQueueCopy, queuedNameUpdateRequest, queuePhaseLabel, previewClipDetails, previewExecutionDetails, preflightDetails, jobEtaLabel, performancePreset, validateSettings, validateUserPreset, exportUserPreset, hasUnsavedSettings, validateCalibrationReport, calibrationApplicable, calibrationDetails, calibrationStatusLabel, calibrationContextMatches, zoomPanGeometry, compareSplitPercent, sourceDepthCompareAvailable });
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = frontendContract;
 if (typeof window !== "undefined") window.StereoLabFrontendContract = frontendContract;
@@ -513,7 +551,7 @@ if (typeof window !== "undefined") window.StereoLabFrontendContract = frontendCo
 if (typeof document !== "undefined") (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const ids = ["mediaInput","dropZone","browseButton","sourceVideo","sourceImage","processedImage","previewEmpty","previewStage","sourceName","previewState","generatePreview","layoutSelect","formatHint","previewModeLabel","presetSelect","depthMode","depthNote","installSelected","modelRow","modelInput","modelButton","modelState","modelSizeRow","modelSizeLabel","modelSize","midasSizeNote","strength","strengthValue","convergence","convergenceValue","temporalSmoothing","smoothingValue","edgeRefinement","invertDepth","resolution","quality","convertButton","convertCount","convertHint","queueRows","queueEmpty","queueCount","queueHeadingCount","clearQueueButton","applySettingsToReady","queueWorkflowStatus","outputNamingControls","outputNameTemplate","outputNameTemplateHelp","outputNamingStatus","enginePill","engineText","toolDescription","toolPath","runtimeDescription","runtimeCommand","modelCards","refreshModels","toast","helpButton","aboutDialog","aboutDone","completionNotifications","completionNotificationStatus","shortcutHelp"];
+  const ids = ["mediaInput","dropZone","browseButton","sourceVideo","sourceImage","processedImage","previewEmpty","previewStage","sourceName","previewState","generatePreview","layoutSelect","formatHint","previewModeLabel","presetSelect","depthMode","depthNote","installSelected","modelRow","modelInput","modelButton","modelState","modelSizeRow","modelSizeLabel","modelSize","midasSizeNote","strength","strengthValue","convergence","convergenceValue","temporalSmoothing","smoothingValue","edgeRefinement","invertDepth","resolution","quality","convertButton","convertCount","convertHint","queueRows","queueEmpty","queueCount","queueHeadingCount","clearQueueButton","applySettingsToReady","queueWorkflowStatus","outputNamingControls","outputNameTemplate","outputNameTemplateHelp","outputNamingStatus","historyPanel","historyStatus","historyRows","historyRefresh","historyMore","enginePill","engineText","toolDescription","toolPath","runtimeDescription","runtimeCommand","modelCards","refreshModels","toast","helpButton","aboutDialog","aboutDone","completionNotifications","completionNotificationStatus","shortcutHelp"];
   ids.push("executionMode", "executionNote", "previewExecution", "retryGpu", "performancePreset", "performancePresetStatus", "performancePresetSummary", "resetPerformancePreset", "exportPreset", "importPresetButton", "importPresetFile", "calibrationBudget", "calibrateInput", "calibrationStatus", "calibrationReport", "calibrationSummary", "calibrationCandidates", "calibrationScope", "calibrationLimitations", "calibrationStorageWarning", "applyCalibration", "tabCompare", "previewMedia", "sourceDepthCompare", "compareSource", "compareDepth", "compareDivider", "compareControls", "compareSlider", "compareValue", "compareResolution", "zoomIn", "zoomOut", "zoomLabel", "resetZoom", "previewDetail", "previewDetailHint", "processedClipCapability", "processedClipDuration", "generateProcessedClip", "cancelProcessedClip", "processedClipStatus", "processedClipVideo");
   const ui = Object.fromEntries(ids.map((id) => [id, $(id)]));
   const imageExtensions = new Set(["jpg","jpeg","png","webp"]);
@@ -532,6 +570,7 @@ if (typeof document !== "undefined") (() => {
   let previewRevision = 0, resultRevision = -1, previewBusy = false, sourceError = "", previewError = "";
   let zoomState = { zoom: 1, panX: 0, panY: 0 }, panPointer = null, compareSplit = 50;
   let models = [], runtime = null, status = null, statusLoadError = "", customModelAvailable = false, catalogError = "";
+  let historyCapabilities = null, historyCursor = null, historyLoading = false;
   let namingCapability = null, currentOutputNameTemplate = "{name}_{layout}";
   let modelTimer = null, jobTimer = null, jobsBusy = false, modelsBusy = false, submitting = false, queueMutationBusy = false, queueWorkflowMessage = "", toastTimer = null;
   let completionNoticesOptedIn = false, completionNotificationBusy = false;
@@ -938,6 +977,7 @@ if (typeof document !== "undefined") (() => {
       const info=[formatBytes(item.file?.size||item.size),item.layout].filter(Boolean).join(" · ");if(info)meta.append(el("span","",info));copy.append(name,meta);
       const execution=executionSummary(item.execution,item.pipeline);if(execution)copy.append(el("div","queue-execution",execution));else if(item.executionMode)copy.append(el("div","queue-execution",`Requested: ${{auto:"Auto",hybrid:"GPU + CPU",gpu:"NVIDIA GPU",cpu:"CPU only"}[item.executionMode]||item.executionMode} · awaiting execution`));
       const runtimeDetails=progressDetails(item);if(runtimeDetails.length)copy.append(el("div","queue-runtime",runtimeDetails.join(" · ")));
+      if(item.historyWarning)copy.append(el("small","queue-source-detail",`History warning: ${String(item.historyWarning).slice(0,240)}`));
       const preflight=frontendContract.preflightDetails(item.preflight,formatBytes);if(preflight.summary){const budget=el("div","queue-preflight");budget.append(el("div","queue-preflight-summary",preflight.summary));if(preflight.visibleWarning)budget.append(el("small","queue-preflight-warning",preflight.visibleWarning));const extraWarnings=preflight.warnings.filter((warning)=>warning!==preflight.visibleWarning);if(preflight.basis||extraWarnings.length){const details=el("details","queue-preflight-details");details.append(el("summary","","Estimate details"));if(preflight.basis)details.append(el("small","queue-preflight-basis",`Estimate basis: ${preflight.basis}`));for(const warning of extraWarnings)details.append(el("small","queue-preflight-warning",warning));budget.append(details);}copy.append(budget);}
       if(item.settingsSnapshot)copy.append(el("small","queue-settings-detail",`${item.jobId?"Server snapshot":item.settingsFrozen?"Frozen settings":"Unfrozen · uses current settings at submit"}: ${settingsDescription(item.settingsSnapshot)}`));
       else if(!item.jobId&&item.state==="ready")copy.append(el("small","queue-settings-detail","Unfrozen · uses the visible settings when you submit this file."));
@@ -1029,7 +1069,56 @@ if (typeof document !== "undefined") (() => {
     ui.runtimeDescription.textContent=runtime.available?`ONNX Runtime ${runtime.version || ""} ready. Providers: ${providers}. ${capability}. ${actual}.${runtime.error ? ` ${runtime.error}` : ""}`:`ONNX Runtime is missing. Install the project dependencies, then restart StereoLab.${runtime.error ? ` ${runtime.error}` : ""}`;
     ui.runtimeCommand.hidden=Boolean(runtime.available);
   }
-  async function loadStatus(){try{status=await request("/api/status");statusLoadError="";namingCapability=frontendContract.outputNamingCapability(status);ui.outputNamingControls.hidden=!namingCapability;if(namingCapability)ui.outputNameTemplate.maxLength=namingCapability.max_template_length*2;customModelAvailable=Boolean(status.model_available);ui.modelState.textContent=customModelAvailable?(status.model_name||"Custom model loaded"):"No model loaded";runtime=status.runtime_info||status.runtime||runtime;ui.enginePill.classList.toggle("offline",!status.ffmpeg_found);ui.engineText.textContent=status.ffmpeg_found?"Local video tools ready":"FFmpeg needed for video";ui.toolDescription.textContent=status.ffmpeg_found?"FFmpeg ready for local video exports.":"FFmpeg is missing. Photo export remains available.";ui.toolPath.textContent=status.ffmpeg_path||"Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.";renderRuntime();updateSettings(false);updateQueue();}catch(error){statusLoadError=error.message;namingCapability=null;ui.outputNamingControls.hidden=true;ui.enginePill.classList.add("offline");ui.engineText.textContent="Local server unavailable";ui.toolDescription.textContent=error.message;toast("Could not connect to the local server.",true);updateProcessedClipPanel();updateQueue();}}
+  function renderHistory(){
+    ui.historyPanel.hidden=!historyCapabilities;ui.historyRows.replaceChildren();ui.historyMore.hidden=true;
+    if(!historyCapabilities)return;
+    const caps=historyCapabilities;
+    ui.historyRefresh.disabled=!caps.enabled;ui.historyMore.disabled=!caps.enabled;
+    if(!caps.enabled){ui.historyStatus.textContent="History is disabled for this server. Set STEREOLAB_HISTORY_INSTANCE and restart to enable prior-launch records.";return;}
+    const warning=typeof caps.warning==="string"&&caps.warning.trim()?` ${caps.warning.trim().slice(0,240)}`:"";
+    ui.historyStatus.textContent=`${caps.state==="degraded"?"History storage is degraded; saved records may be incomplete.":"Showing exports from previous launches."}${warning}`;
+    for(const item of historyItems){
+      const row=el("article","history-row"),copy=el("div","history-copy"),title=el("strong","history-source",item.filename);
+      const date=new Date(item.created_at*1000),completed=item.completed_at==null?"":` · Completed ${new Date(item.completed_at*1000).toLocaleString()}`;copy.append(title,el("small","history-meta",`Started ${Number.isNaN(date.getTime())?"at an unknown time":date.toLocaleString()}${completed} · ${frontendContract.historyStateLabel(item)} · ${formatBytes(item.source_size_bytes)||"size unavailable"}`));
+      if(item.state==="interrupted")copy.append(el("small","history-note",`Interrupted during ${item.last_known_state}. Select the source to create a new export from the beginning.`));
+      copy.append(el("small","history-settings",`Settings: ${settingsDescription(item.settings)}`));
+      copy.append(el("small","history-settings",`Name template: ${item.output_name_template} · ${item.output_name||item.planned_output_name}`));
+      copy.append(el("small","history-note","Source files are not retained. Reselect the source to create a new export; no file is matched automatically."));
+      const actions=el("div","history-actions");
+      const use=el("button","row-button","Use settings and reselect source");use.type="button";use.addEventListener("click",()=>useHistorySettings(item));actions.append(use);
+      if(item.output_available){const link=el("a","row-button","Download ↓");link.href=`/api/history/${encodeURIComponent(item.job_id)}/download`;link.download=item.output_name;actions.append(link);}
+      else if(item.state==="completed")actions.append(el("small","history-unavailable","Output unavailable"));
+      row.append(copy,actions);ui.historyRows.append(row);
+    }
+    if(historyItems.length===0)ui.historyRows.append(el("p","history-empty","No exports from previous launches are available."));
+    ui.historyMore.hidden=!historyCursor;
+  }
+  let historyItems=[];
+  async function loadHistory(append=false){
+    if(!historyCapabilities?.enabled||historyLoading)return;
+    historyLoading=true;ui.historyRefresh.disabled=true;ui.historyMore.disabled=true;
+    try{
+      const before=append?historyCursor:null,url=`/api/history?limit=50${before?`&before=${encodeURIComponent(before)}`:""}`;
+      const page=frontendContract.validateHistoryPage(await request(url));
+      historyItems=append?[...historyItems,...page.items]:page.items;historyCursor=page.next_cursor;
+      renderHistory();
+      const warning=historyCapabilities.state==="degraded"?`${historyCapabilities.warning||"History storage is degraded."} `:"";
+      ui.historyStatus.textContent=`${warning}${page.invalid_records?`${page.invalid_records} invalid record${page.invalid_records===1?" was":"s were"} hidden and preserved. `:""}Showing exports from previous launches.`;
+    }catch(error){
+      ui.historyMore.hidden=!historyCursor;
+      ui.historyStatus.textContent=error.status===409?"History is disabled for this server.":`History is unavailable: ${String(error.message||error).slice(0,240)}`;
+    }finally{historyLoading=false;ui.historyRefresh.disabled=!historyCapabilities?.enabled;ui.historyMore.disabled=!historyCapabilities?.enabled;}
+  }
+  function useHistorySettings(item){
+    try{
+      const settings=frontendContract.validateSettings(item.settings),template=frontendContract.validateOutputNameTemplate(item.output_name_template);
+      assignSettings(settings);ui.outputNameTemplate.value=template;currentOutputNameTemplate=template;
+      performanceBaseline={...settings};importedPresetBaseline=true;ui.performancePreset.value="custom";ui.presetSelect.value="custom";updateSettings();
+      ui.historyStatus.textContent="Validated settings and naming loaded. Source files are not retained: explicitly select a source, then submit a new export.";
+      ui.mediaInput.focus();
+    }catch(error){ui.historyStatus.textContent=`Saved settings could not be applied: ${String(error.message||error).slice(0,200)}`;}
+  }
+  async function loadStatus(preserveHistory=false){const previousHistoryCapabilities=historyCapabilities;try{status=await request("/api/status");statusLoadError="";historyCapabilities=frontendContract.historyCapability(status);if(historyCapabilities){if(!preserveHistory)historyItems=[];historyCursor=null;renderHistory();if(historyCapabilities.enabled)await loadHistory();}else{historyItems=[];historyCursor=null;ui.historyPanel.hidden=true;}namingCapability=frontendContract.outputNamingCapability(status);ui.outputNamingControls.hidden=!namingCapability;if(namingCapability)ui.outputNameTemplate.maxLength=namingCapability.max_template_length*2;customModelAvailable=Boolean(status.model_available);ui.modelState.textContent=customModelAvailable?(status.model_name||"Custom model loaded"):"No model loaded";runtime=status.runtime_info||status.runtime||runtime;ui.enginePill.classList.toggle("offline",!status.ffmpeg_found);ui.engineText.textContent=status.ffmpeg_found?"Local video tools ready":"FFmpeg needed for video";ui.toolDescription.textContent=status.ffmpeg_found?"FFmpeg ready for local video exports.":"FFmpeg is missing. Photo export remains available.";ui.toolPath.textContent=status.ffmpeg_path||"Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.";renderRuntime();updateSettings(false);updateQueue();}catch(error){statusLoadError=error.message;namingCapability=null;if(preserveHistory&&previousHistoryCapabilities){historyCapabilities=previousHistoryCapabilities;renderHistory();ui.historyStatus.textContent=`Could not refresh history status. Showing the last loaded records. ${String(error.message||error).slice(0,180)}`;}else{historyCapabilities=null;ui.historyPanel.hidden=true;}ui.outputNamingControls.hidden=true;ui.enginePill.classList.add("offline");ui.engineText.textContent="Local server unavailable";ui.toolDescription.textContent=error.message;toast("Could not connect to the local server.",true);updateProcessedClipPanel();updateQueue();}}
   async function retryGpuAction(){
     if(!frontendContract.retrySupported(runtime)||ui.retryGpu.disabled)return;
     ui.retryGpu.disabled=true;ui.retryGpu.textContent="Resetting GPU retry…";
@@ -1066,7 +1155,7 @@ if (typeof document !== "undefined") (() => {
     let naming=item.outputNameTemplateSnapshot?{outputNameTemplate:item.outputNameTemplateSnapshot,plannedOutputName:item.plannedOutputName||null,outputName:item.outputName||null}:null,namingError=item.namingSnapshotError||"";
     if(job.naming_schema_version!=null||job.output_name_template!=null||job.planned_output_name!=null||job.output_name!=null){naming=null;namingError="";try{naming=frontendContract.validateQueueJobNaming(job);}catch(error){namingError=error.message;}}
     else if(namingCapability){naming=null;namingError="The server did not include an output name template snapshot. Refresh or upgrade StereoLab.";}
-    Object.assign(item,{jobId:job.id,purpose:job.purpose,name:job.filename||item.name,mediaType:job.media_type||item.mediaType,state:job.state,progress:job.progress,message:job.message,error:job.error,outputName:job.output_name??naming?.outputName??item.outputName??null,plannedOutputName:naming?.plannedOutputName??item.plannedOutputName??null,outputNameTemplateSnapshot:naming?.outputNameTemplate??item.outputNameTemplateSnapshot??null,namingFrozen:Boolean(naming||item.namingFrozen),namingSchemaVersion:job.naming_schema_version??item.namingSchemaVersion??null,namingSnapshotError:namingError,layout:job.layout,execution:job.execution,executionMode:job.execution_mode,pipeline:job.pipeline,settingsSchemaVersion:job.settings_schema_version??null,settingsSnapshot:snapshot?.settings||null,settingsSnapshotError:snapshotError,settingsFrozen:Boolean(snapshot),sourceAvailable:snapshot?.sourceAvailable??null,queuePosition:snapshot?.queuePosition??null},reported);
+    Object.assign(item,{jobId:job.id,purpose:job.purpose,name:job.filename||item.name,mediaType:job.media_type||item.mediaType,state:job.state,progress:job.progress,message:job.message,error:job.error,historyWarning:typeof job.history_warning==="string"?job.history_warning.slice(0,240):item.historyWarning||null,outputName:job.output_name??naming?.outputName??item.outputName??null,plannedOutputName:naming?.plannedOutputName??item.plannedOutputName??null,outputNameTemplateSnapshot:naming?.outputNameTemplate??item.outputNameTemplateSnapshot??null,namingFrozen:Boolean(naming||item.namingFrozen),namingSchemaVersion:job.naming_schema_version??item.namingSchemaVersion??null,namingSnapshotError:namingError,layout:job.layout,execution:job.execution,executionMode:job.execution_mode,pipeline:job.pipeline,settingsSchemaVersion:job.settings_schema_version??null,settingsSnapshot:snapshot?.settings||null,settingsSnapshotError:snapshotError,settingsFrozen:Boolean(snapshot),sourceAvailable:snapshot?.sourceAvailable??null,queuePosition:snapshot?.queuePosition??null},reported);
     return notice.notify;
   }
   function mergeRemoteJobs(remote){const completed=[];for(const job of remote){if(hiddenJobs.has(job.id)||!frontendContract.isOrdinaryExportJob(job))continue;let item=items.find((x)=>x.jobId===job.id);if(!item){item={uid:job.id};items.push(item);}if(mergeJob(item,job))completed.push(job.filename||item.name);}updateQueue();showCompletionNoticeBatch(completed);}
@@ -1105,6 +1194,7 @@ if (typeof document !== "undefined") (() => {
   window.addEventListener("keydown",(event)=>{const action=frontendContract.keyboardShortcutAction({altKey:event.altKey,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,repeat:event.repeat,defaultPrevented:event.defaultPrevented,isComposing:event.isComposing,code:event.code,target:event.target,modalOpen:Boolean(document.querySelector("dialog[open]")),previewEnabled:!ui.generatePreview.disabled,submitEnabled:!ui.convertButton.disabled});if(!action)return;event.preventDefault();(action==="preview"?ui.generatePreview:ui.convertButton).click();});
   window.addEventListener("focus",updateCompletionNotificationControls);document.addEventListener("visibilitychange",()=>{if(!document.hidden)updateCompletionNotificationControls();});
   ui.applySettingsToReady.addEventListener("click",applySettingsToReady);
+  ui.historyRefresh.addEventListener("click",()=>loadStatus(true));ui.historyMore.addEventListener("click",()=>loadHistory(true));
   ui.outputNameTemplate.addEventListener("input",()=>{currentOutputNameTemplate=ui.outputNameTemplate.value;try{frontendContract.validateOutputNameTemplate(currentOutputNameTemplate,namingCapability?.max_template_length??120);ui.outputNameTemplate.removeAttribute("aria-invalid");}catch(error){ui.outputNameTemplate.setAttribute("aria-invalid","true");ui.outputNamingStatus.textContent=error.message;}updateQueue();});
   ui.clearQueueButton.addEventListener("click",()=>{const finished=items.filter((x)=>["completed","failed","canceled"].includes(x.state));finished.forEach(removeItem);saveHidden();updateQueue();toast(finished.length?`${finished.length} finished item${finished.length===1?"":"s"} removed from this browser’s list.`:"There are no finished items to clear.");});
   ui.helpButton.addEventListener("click",()=>ui.aboutDialog.showModal());ui.aboutDone.addEventListener("click",()=>ui.aboutDialog.close());window.addEventListener("beforeunload",()=>{if(previewUrl)URL.revokeObjectURL(previewUrl);});

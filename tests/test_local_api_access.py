@@ -1,6 +1,7 @@
 """Host and browser-origin boundaries for the loopback-only API."""
 from pathlib import Path
 import unittest
+import threading
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -13,6 +14,11 @@ SERVICE_PORT = 8765
 
 class LocalApiAccessTests(unittest.TestCase):
     def setUp(self):
+        for name, value in (('ACCEPTING_MUTATIONS', True), ('WORKER_STOP', threading.Event()),
+                            ('WORKER', None), ('HISTORY', None)):
+            context = patch.object(main, name, value)
+            context.start()
+            self.addCleanup(context.stop)
         self.client = TestClient(main.app, base_url=f"http://127.0.0.1:{SERVICE_PORT}")
 
     def tearDown(self):
@@ -36,7 +42,7 @@ class LocalApiAccessTests(unittest.TestCase):
                 clear.assert_called_once()
 
     def test_default_http_port_is_equivalent_when_it_is_the_request_port(self):
-        with TestClient(main.app, base_url="http://127.0.0.1") as client:
+        with patch.object(main, 'ensure_worker'), TestClient(main.app, base_url="http://127.0.0.1") as client:
             with patch.object(main.DEPTH_ENGINE, "reset_gpu_failures"), patch.object(main.PREVIEW_CACHE, "clear"):
                 response = client.post("/api/runtime/gpu/reset", headers={"Origin": "http://localhost"})
         self.assertEqual(response.status_code, 200, response.text)

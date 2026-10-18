@@ -1,9 +1,13 @@
-# Job history — proposed bounded Phase 4.1 slice
+# Job history — bounded Phase 4.1 slice
 
-Status: standalone storage foundation implemented in `job_history.py`; backend,
-API and UI integration remain proposed and unimplemented. Ordinary export
-metadata only. Existing job processing, source cleanup and download URLs continue
-to work; source retention, automatic restart and frame resume stay off.
+Status: storage, backend lifecycle, API and UI integrated in source on top of
+`20709ff`. Independent CPU and GPU-environment suites each passed 364 tests
+(one Windows symlink-privilege skip). Isolated CPU server restart/download/hash,
+pending interruption and owner-contention acceptance passed. Browser settings
+reuse leaves the source empty and conversion disabled; 320/391px layouts fit.
+Evidence: `.runtime/history-restart-verification/25c0413df33040f08bfa829e36d733e8/`.
+Ordinary export metadata only; source retention, automatic restart and frame
+resume stay off. Existing servers were left running with their current code.
 
 ## Outcome and scope
 
@@ -192,7 +196,7 @@ Interrupted; select source to create a new export, without a Resume button.
 Show disabled/degraded and missing-output states truthfully. Older backends keep
 their current queue UI without broken history requests.
 
-## Implemented storage API; integration deferred
+## Implemented storage API and application adapter
 
 `HistoryStore.from_environment(DATA_ROOT)` reads the opt-in variable without
 opening or creating files. `HistoryStore(DATA_ROOT, instance_name)` is the explicit
@@ -206,7 +210,7 @@ exactly one filesystem link; symlinks, redirected namespaces and hardlinks are
 rejected before database connection. This is a local, cooperative ownership
 boundary, not protection against an adversarial process racing filesystem edits.
 
-The later backend adapter must call these methods under its existing queue/jobs
+The backend adapter calls these methods under its existing queue/jobs
 ordering and publish the in-memory change only after a successful durable write:
 
 | Method | Exact integration contract |
@@ -233,12 +237,17 @@ at most eight nested levels, 64 entries per container and 4096 characters per
 string. Production defaults remain 1000 records and 90 days. Constructor quota
 and clock overrides exist for bounded tests, not external path configuration.
 
-The adapter still needs pre-upload capacity checks, streamed source hashing,
-admission/edit rollback ordering, failure-to-status mapping, lifecycle hooks and
-read-only API/UI wiring. Standalone storage passing tests does not establish
-durable application behavior. No source files are read, retained or deleted by
-this module. Completed output lookup checks confinement/readability/size, not
-cryptographic identity or atomic HTTP file-open replacement races.
+The adapter includes `check_capacity()` before application upload staging,
+streamed source hashing, durable-before-publication admission and queued edits,
+failure-to-status mapping, coarse lifecycle hooks and read-only API/UI wiring.
+FastAPI parses multipart uploads before the endpoint; this check does not reject
+the network body before framework spooling. Capacity is rechecked in admission.
+`mark_degraded()` latches adapter persistence failures while live work continues.
+Public completed records add `completed_at` from their terminal update time;
+page validation uses the store's `invalid_records` count. No source files are
+read, retained or deleted by the store. Completed output lookup checks
+confinement/readability/size, not cryptographic identity or atomic HTTP file-open
+replacement races.
 
 ## Acceptance before promotion
 
@@ -269,3 +278,54 @@ this slice. Preserve legacy live servers and document exact evidence boundaries.
 Reference mechanics: [Python Windows locking](https://docs.python.org/3/library/msvcrt.html#msvcrt.locking),
 [Python POSIX locking](https://docs.python.org/3/library/fcntl.html#fcntl.flock),
 [SQLite synchronization](https://www.sqlite.org/pragma.html#pragma_synchronous).
+
+## Implemented integration sequence (design rationale)
+
+Before this integration the app created its worker lazily in `ensure_worker()`
+and it blocked forever in `JOB_QUEUE.get()`. Do not open `HistoryStore` at module import
+or simply add `close()` to an ASGI shutdown callback: that could release the
+instance lease while a daemon worker is still writing a terminal record. Keep
+the standalone foundation intact and implement app integration in these
+reviewable steps:
+
+1. **Own worker lifetime.** Add an application lifespan that reads the opt-in
+   instance setting, acquires `HistoryStore` before serving requests, and owns a
+   stoppable worker. Stop accepting mutations before shutdown begins. Signal an
+   active job to cancel, stop its owned encoder process using current behavior,
+   and wake the worker if it is waiting on an empty queue. Join the worker before
+   closing SQLite or releasing the lease. If processing does not stop, keep the
+   store and lease open until the worker exits; never close underneath a live
+   writer. Test disabled mode with no history files and opt-in startup contention
+   with no second worker started.
+2. **Admit before publishing.** Keep streaming the upload into its existing
+   uniquely owned staging file while updating SHA256 and byte count. Before the
+   upload body is read, reject when durable history cannot admit an export; after
+   streaming and validation, transactionally admit the record before inserting
+   into `JOBS` or `JOB_QUEUE`. On failure, remove only the staged file proven to
+   belong to that request. Processed preview clips remain outside history.
+3. **Persist queue edits at the existing lock boundary.** Under queue-before-jobs
+   locks, commit settings/naming changes before mutating the in-memory `Job`.
+   Persist queued removal as canceled before removing it from the queue. Keep
+   expensive model checks and upload hashing outside these locks, then recheck
+   pending membership as the current settings endpoint does.
+4. **Persist coarse lifecycle boundaries.** Record processing when the worker
+   claims an ordinary export, and record completed only after output validation
+   and close; record failed/canceled at the existing exception boundary. Keep
+   preview clips on their current in-memory path. A history write failure latches
+   degraded status while admitted work continues; live completed output remains
+   downloadable through `/api/jobs/{id}/download`.
+5. **Expose previous-run history.** Add the independent capability object,
+   prior-boot listing and confined output download routes, then a capability-
+   gated UI for read-only details, available downloads, settings reuse and
+   explicit source reselection. Do not reconstruct `Job` objects or refill the
+   current queue from history.
+6. **Prove restart behavior in an isolated CPU server.** Use a dedicated history
+   instance and generated media. Complete one still export, leave one queued or
+   active job for graceful shutdown, restart with the same instance and confirm
+   terminal success remains available while unfinished work is marked
+   interrupted. Verify download bytes and source hashes, then verify a concurrent
+   second server fails startup without changing the first server's records.
+
+Each step needs focused regressions before moving to the next. Keep source
+retention, automatic requeue, queue-order persistence, project records, depth
+caching, pause/checkpoints and frame resume out of this integration slice.

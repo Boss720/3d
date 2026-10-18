@@ -279,15 +279,59 @@ One local run showed tiny first-frame raw-model variation while the second and
 third repeats matched exactly; fixed-input encoder pairs matched exactly. This
 does not establish universal determinism or close the earlier clip pixel gate.
 
+The diagnostic now captures the exact preprocessed inputs before ONNX execution
+and compares all three repeat pairs. `--warmup-frames 1` requests one separately
+accounted-for diagnostic inference before the measured sequence; the default is
+zero. Local cold and warmed runs both showed raw GPU variation despite identical
+inputs, so no production warmup behavior was adopted.
+`scripts/analyze_variance_captures.py --report <report.json>` independently checks
+capture hashes and stage arrays. Add `--encode` to encode each captured rendered
+sequence with the saved fast profiles and compare decoded results under the
+unchanged strict pixel policy. It does not run model inference. Small rendered
+differences were amplified by libx264 in some experiments; tested NVENC results
+were identical. These observations do not explain every earlier video difference.
+
+The clip verifier now requires all three comparisons (ordinary repeat, clip vs
+first export, clip vs repeated export) to pass and rejects missing public execution
+proof. A fresh isolated GPU API run passed with all 36 decoded frames identical;
+the original failed report remains preserved. This validates that generated run,
+not universal repeatability or representative footage.
+
 The server accepts loopback hosts and rejects browser writes from foreign origins
 or a different service port. Local CLI calls without an Origin remain supported.
 This is a local app boundary, not authentication for a public deployment.
 
-The standalone `job_history.py` module is preparatory storage work; it is not
-wired into the server or UI. Current app jobs still do not survive a restart.
-The instance configuration and history endpoints in `plans/job-history.md` describe
-the next integration slice, not currently available app features. Source retention,
-automatic restart and frame-level resume remain unavailable.
+Optional **History from previous launches** remembers ordinary export metadata,
+settings and naming across server launches. Enable it before starting a new server:
+
+```powershell
+$env:STEREOLAB_HISTORY_INSTANCE = 'desktop'
+.\run.ps1
+```
+
+Reuse that stable name to revisit its history. Names use lowercase letters,
+digits, underscores or hyphens, start with a letter/digit, and have at most 32
+characters. Only one server can own a name at a time. Unset/empty disables history;
+it creates no history files and does not delete an existing store. Do not restart
+a server with needed in-memory downloads merely to enable the feature.
+
+History stores up to 1000 metadata records under
+`DATA_ROOT/.runtime/history/instance-<name>/` and prunes terminal metadata after
+90 days or when capacity is needed. It never deletes source/output files as part
+of pruning. Completed records offer a download while the saved output is still
+available and has its recorded size. Unfinished prior-launch records are marked
+interrupted. **Use settings and reselect source** loads settings/naming; select
+the source explicitly and submit a new export. Source files, queue order and
+processing progress are not restored. History does not start work automatically.
+
+Failed history writes show a warning; new admissions and settings/name edits are
+blocked while already-admitted work and cancellation remain available. Account
+for current outputs before repairing storage and restarting. History is local,
+single-process metadata storage; reload/multi-worker and network filesystems are
+unsupported. Source and frozen EXE data roots have separate history. The existing
+EXE has not been rebuilt with this source change. See `plans/job-history.md` for
+the failure and ownership contract; source retention and frame resume remain
+unavailable.
 
 DEPTH/RGB-D no longer synthesize unused stereo eyes. An alternating four-sample
 1080p approximation-to-PNG benchmark measured DEPTH medians 0.321 â†’ 0.277 seconds

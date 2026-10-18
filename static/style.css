@@ -297,6 +297,20 @@ main {
   border-color: #a57b46;
 }
 
+.history-panel { margin-top: 18px; }
+.history-list { display: grid; gap: 10px; }
+.history-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 15px; border: 1px solid var(--line, #353638); border-radius: 12px; background: var(--surface-raised, #191a1c); }
+.history-copy { display: grid; gap: 6px; min-width: 0; }
+.history-source { overflow-wrap: anywhere; }
+.history-meta, .history-settings, .history-note, .history-unavailable { color: var(--muted, #aaa69d); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.history-note { color: #d4b986; }
+.history-unavailable { align-self: center; }
+.history-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.history-actions .row-button { white-space: normal; text-decoration: none; }
+.history-pagination { display: flex; justify-content: center; margin-top: 12px; }
+.history-empty { color: var(--muted, #aaa69d); padding: 12px 0; }
+@media (max-width: 700px) { .history-row { grid-template-columns: 1fr; } .history-actions { justify-content: flex-start; } }
+
 .preview-view-tools,
 .compare-controls {
   padding-right: 18px;

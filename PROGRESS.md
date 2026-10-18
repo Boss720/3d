@@ -660,7 +660,7 @@ integrated-*logs as inprogress evidence; rerunfullsuites afterfoundationrelease.
 58% fivehour/54%weekly usage observed; noresetused. Newimplementation remains
 uncommitted after a130916. HANDOFFbeingupdated incrementally, finalgatespending.
 
-## Continuation closing handoff
+## Previous continuation closing handoff — before commit cba8716
 
 Final history foundation is released as standalone job_history.py plus25 focused
 tests and exact plans/job-history.md API. Real Windows process contention/exit,
@@ -685,10 +685,223 @@ is source-matched with one completed generated Small DML256 custom-name PNG640x1
 Own CPU8773 PID25384 stopped only after allfour terminal records saved. Old user
 download URLs remain available; own CPU files persist, its temporary URLs stopped.
 
-Observed closing usage83% five-hour/58%weekly; no reset consumed. All workers
-released. HANDOFF.md rewritten with completed work, exact evidence, limitations,
-server ownership and next integration gates; previous handoff archived. Commits
-fbab918/a130916 remain the latest commits; this continuation's20 files are
-uncommitted. No push, EXE rebuild, broad cleanup or additional roadmap promotion.
-The requested commit/continue-until-near-limit/handoff objective is complete;
-the roadmap itself remains unfinished.
+At that handoff, observed usage was83% five-hour/58%weekly; no reset consumed.
+All workers were released. The20 files described as uncommitted were subsequently
+committed as cba8716. The roadmap remains unfinished.
+
+## Roadmap resumed — 18 October 2026
+
+Starting account usage was 85% five-hour and 58% weekly, with one reset credit
+available and unused. The current commit is cba8716; the tree was clean on entry.
+Source inspection confirmed the Phase4.1 integration blocker: `ensure_worker()`
+starts a daemon lazily, while `worker_loop()` blocks indefinitely in
+`JOB_QUEUE.get()`. Added a concrete six-step integration order to
+`plans/job-history.md`, including keeping the instance lease through worker
+shutdown and joining before SQLite close, durable admission/edit ordering,
+read-only history UI/API and isolated CPU restart acceptance.
+
+Current delta is documentation-only and uncommitted: `plans/job-history.md`.
+No service was restarted or stopped, no reset credit was consumed, and no
+implementation test was run. Resume at worker/lifespan ownership; existing
+`job_history.py` remains a standalone foundation. Prior service inventory and
+all earlier source-level/test evidence are historical observations from the
+previous handoff and should be refreshed before any service action.
+
+## Phase 4.1 application integration resumed — 18 October 2026
+
+Baseline master 20709ff. Preserve existing HANDOFF.md, PROGRESS.md and
+plans/job-history.md changes and output/ mockups. No applicable AGENTS.md found.
+Frozen scope: opt-in metadata history with lifespan-owned worker and lease,
+streamed upload hashes/capacity checks, durable admission and queued edits,
+coarse lifecycle records, prior-run read-only API/UI, isolated CPU restart proof.
+No implicit source retention/requeue, project/cache/resume work or live-server restart.
+
+Ownership: backend worker owns main.py, job_history.py and new
+ tests/test_history_integration.py plus necessary existing backend tests;
+frontend worker owns static/app.js, static/index.html, static/style.css and
+ tests/test_frontend_contract.py. Coordinator owns docs, independent integration
+review and scripts/verify_history_restart.py. Shared checkout with exclusive files.
+Backend is complex (gpt-6.1-sol); frontend bounded (gpt-6-luna).
+Verification: workers capture semantic red/green tests; coordinator reviews complete
+combined diff, runs full CPU/GPU suites and JS syntax, then exercises isolated CPU
+restart/download/contention and browser history behavior. Existing server URLs
+and queues are preserved. No commit or executable build requested.
+Independent read-only review lane added: gpt-6-luna inspects lifecycle, ownership,
+transaction and API boundaries; no files overlap and no test runs during worker
+red/green stages. Coordinator acceptance runner now exists at
+scripts/verify_history_restart.py; uses private data roots, generated PNGs and
+owned subprocesses only. Browser QA will use its restarted isolated server.
+Review checkpoint: coordinator and independent reviewer both identified queued
+removal committing canceled before fallible source unlink. Backend reordered owned
+cleanup before durable cancellation and queue mutation, preserving existing409 on
+cleanup failure; regression requested. Coordinator also caught API/frontend
+invalid_records field mismatch before acceptance, now aligned to actual store DTO.
+Requested current-job history warning display and capability refresh on history
+refresh so failed lifecycle writes do not silently look saved in an open page.
+
+### Phase 4.1 integration outcome — independently verified
+
+Backend and frontend ownership released; independent read-only reviewer finished.
+Coordinator inspected combined source/tests/diff and corrected a renderer ordering
+bug that overwrote the invalid-record warning with the generic history heading.
+No unrelated file changes were removed; no commit, push or EXE build performed.
+
+Raw worker evidence is retained under .runtime/history-backend-verification/ and
+.runtime/history-frontend-verification/. Backend initial red: missing history
+capability/HISTORY global, Ran2 FAILED(errors=2). Final focused integration12 OK.
+Frontend readonly-validation mutation was rejected with Missing expected exception;
+final34 contract tests OK. Worker reports were independently checked against source.
+
+Coordinator first fullCPU run:364 tests, one failed legacy preview-gate mock which
+returned a nonexistent/unowned output. Fixture now writes the actual planned owned
+output; scoped roadmap-runtime4 OK. Original failure preserved in
+.runtime/history-coordinator-cpu-tests.log, not counted as accepted evidence.
+Final CPU full suite364 in13.063s OK(skipped=1), GPU-environment364 in11.918s
+OK(skipped=1). Logs .runtime/history-coordinator-cpu-final.log and
+history-coordinator-gpu-final.log. Skip is existing Windows real-symlink privilege
+restriction. No new physical GPU execution claim. After the final display-only
+warning ordering correction, frontend34 in2.017s OK, node --check and compileall
+(main/store/acceptance script/new tests) passed. git diff --check passed.
+
+Real isolated HTTP/process acceptance:
+.venv/Scripts/python.exe scripts/verify_history_restart.py --keep-server
+passed all7 checks, generated CPU balanced PNG export decoded72x192; graceful
+shutdown canceled a controlled waiting image and preserved a pending row. Restart
+kept completed output bytes identical, source SHA256/size exact, pending interrupted,
+current queue empty, no auto requeue; concurrent same-instance process failed startup
+without changing the owner's records. The controlled image waits for cancellation;
+this does not establish real-video cancellation latency or encoder cleanup.
+Report: .runtime/history-restart-verification/25c0413df33040f08bfa829e36d733e8/report.json.
+
+CUA inspected actual completed/canceled/interrupted records and download link on the
+restarted isolated server. Settings reuse loaded CPU balanced snapshot + naming,
+left No media selected, queue rows0 and Convert disabled. Refresh history worked.
+Phone overrides320x844 and391x844 had no document overflow and row actions fit;
+320 measured document320,391 override measured viewport392/document377 due sizing.
+No browser warnings/errors. Screenshot history-browser.png beside report. Viewport
+reset, temporary browser tab closed and owned QA PID21388/port53051 stopped through
+its marker; endpoint closure verified. Original services/queues never contacted.
+
+README, ROADMAP, plan status and HANDOFF now describe integrated opt-in metadata
+history and current evidence. Main app behavior requires a new accounted-for launch
+with STEREOLAB_HISTORY_INSTANCE; existing backend processes and EXE stay historical.
+Phase4.1 metadata integration slice is complete. Remaining roadmap: GPU clip pixel
+gate, real-media/reliability/device checks, project/source retention, reusable depth,
+checkpoints/resume, customization and delivery gates. Future waves need their own
+bounded specs/file ownership. No next worker wave is active.
+
+## GPU consistency follow-up — bounded tensor/warmup diagnostic
+
+Resumed on master20709ff with completed uncommitted Phase4.1/history changes intact.
+No AGENTS instructions have appeared. Army lanes: capture worker owns only
+scripts/isolate_gpu_variance.py and tests/test_variance_isolation.py; analysis worker
+owns new scripts/analyze_variance_captures.py and tests/test_variance_capture_analysis.py;
+coordinator owns plans/gpu-variance-isolation.md and progress/handoff/roadmap/docs.
+Capture: pre-session.run input tensors, exact input hashes, explicit diagnostic-only
+0/1-frame warmup with honest separate accounting, all repeat pairs, monitored8774.
+Analysis: independently rehash captures, compare all stages/pairs, encode independently
+varied rendered sequences using saved fast encoder args and compare with UNCHANGED
+GPU strict decoded policy; preserve original failed reports. No production changes.
+Acceptance: semantic red/green tests, combined diff review, full CPU/GPU-environment
+suite, generated CPU control and sequential fresh-session GPU cold/warm diagnostic,
+resource/idle checks between stages. Known live servers are read only for activity;
+never restart/cancel them or submit jobs. No model download/commit/EXE build.
+Production warmup or tolerance change requires separate evidence/design; a warmed
+passing run alone cannot close the original cold-start application pixel gate.
+Read-only gate-review lane (gpt-6.1-sol) added: inspect existing strict gate
+classification and promotion requirements, no code edits/test/GPU activity.
+Fresh read-only service inventory:8768=39,8770=16,8772=3,8774=1 terminal jobs,
+none active; nvidia-smi2954/4096MiB and0% GPU. Other non-API processes are not
+excluded by these observations. All existing backend fingerprints preserved.
+Gate review found a concrete false-pass path: clip-vs-repeated-export was measured
+but excluded from pass/failure classification. Strict max/mean tolerance is not
+transitive, so require all3 comparisons; keep inconclusive self-repeat precedence.
+Read-only reviewer now owns scripts/verify_clip_preview.py and
+ tests/test_clip_verification.py ONLY for red/green verifier fixes, including
+missing-public-job fail-closed (purpose/provider proof absent). No production
+pipeline/default changes. The historical production first_execution session was
+already reused, so diagnostic one-frame warmup cannot establish the cause of that
+old failure or justify production warmup alone. Metadata-only matched-proxy check
+cannot claim exact independent/server proxy pixels.
+
+### Tensor/warmup wave verified; next owned API check
+
+CPU control and fresh coldGPU/warmedGPU diagnostics completed sequentially. Input
+tensors were bit-identical for every repeat pair. CPU all stages exact. ColdGPU
+raw-output max2.861e-6 and3..9 rendered color values differed by1; warmedGPU1-vs2
+exact but1/2-vs3 raw max2.623e-6 and29 rendered values differed by1. Warmup is not
+a reliable fix. Independent capture/hash validation passed for all runs.
+Per-repeat fastNVENC encodes were decoded-identical across all pairs in these
+experiments. libx264 amplified some cold/warm variations to maxima10/19; warmed
+mean.005891 exceeded strict policy. Thus codec amplification is demonstrated,
+but the old production NVENCmax29 failure is still not explained/reproduced here.
+CPU and preserved legacy captures encoded identically per codec.
+
+All worker files released. Coordinator reviewed diffs and fixed worker interface
+issues before acceptance (duplicate input metadata and CPU encoder profile) and
+required fail-closed API activity checks. FullCPU380 tests OK(skipped1).
+Next coordinator-only bounded wave: launch one NEW isolated GPU API with private
+uploads/outputs/historydisabled and existing readonly modelcache, run corrected
+production clip verifier with known-server idle/newjob guard before submissions,
+then account for its generated jobs and stop its owned server. Preserve old APIs.
+This is required before any new production pixel-gate claim; diagnostic results
+alone do not replace the historical failed gate. No production code changes.
+
+### GPU follow-up final outcome and independent gates
+
+Completed allthree worker lanes and coordinator-only fresh API check. No
+production model/pipeline/default changes: main.py,depth_engine.py,stereo.py,
+job_history.py and both original failed/diagnostic reports match protected hashes.
+Existing uncommitted history/UI/docs and output/ mockups preserved. No commit,
+push, model download, production-server restart or EXE rebuild.
+
+Verifier actual semantic red caught false passed classification from nontransitive
+sparsearrays and missing public job proof. Green8 tests. Capture red13 tests had
+2failures/5errors; final13 pass. Analyzer final9 pass with file/stage hashes,
+bounds, pre-load NPY declared shapes, nonfinite data, compatible duplicateinput
+metadata, CPU encoder profiles and fail-closed activity guards. Worker logs:
+.runtime/gate-review-verification/{semantic-red,semantic-green}.txt,
+.runtime/tensor-capture-verification/, .runtime/variance-analysis-verification/.
+Coordinator independently reviewed code/tests/diff; real run interface bugs found
+and corrected before acceptance. No worker realGPU or server mutation.
+
+Independent full suites: CPU380 tests11.991s OK(skipped1), GPUenvironment380
+11.624s OK(skipped1). Skip remains realWindows symlinkprivilege restriction.
+Negative argparse2 warmup test emits expected usage text in these passinglogs.
+Python compileall and git diff --check pass. Full logs under
+.runtime/gpu-consistency-followup/full-cpu.log and full-gpu.log.
+
+Real experiments sequential: CPU108 measured inferences; coldGPU108; warmedGPU
+one separatelyverified warmup +108 measured. One owned session perprocess, actual
+DML/provider/fallback verification on everyGPUframe. Pinned Small256, generated
+36frame320x180/12fpsproxy, fresh temporal state eachrepeat. Exact input tensors
+matched everypair in bothGPUruns; CPU allstages exact. ColdGPU rawmax2.861e-6,
+rendered3..9 changed values/max1; warm1vs2exact butrepeat3 changed158523rawvalues,
+rawmax2.623e-6,29 renderedvalues/max1. Warmup does not guarantee repeatability.
+Independent analyzers rehashed allartifacts and encoded eachvaried capturedBGR
+sequence. All testedfastNVENCdecodedpairs exact; libx264 amplified coldmax10 and
+warmmax19/mean.005891 (unchanged policyfails). CPU and legacycodedpairs exact.
+This demonstrates some compression amplification, not oldNVENCmax29 rootcause.
+Independent rehash/redecode metrics: gpu-consistency-followup/independent-audit.json.
+
+Fresh corrected production API verifier ran against NEW privateGPUAPI
+PID34376/port56485, currentbackendbuild39c6c6d6528bf2ead09647048f1cc91fc46e1c25534d7f9004716fe881b5d237.
+Privateuploads/outputs/historydisabled, existingmodels read withoutdownloads.
+Full360frame generated source, clip,2matchedordinaryexports and cancel passed.
+All3 paircomparisons36decodedframes exactmax0/mean0; coordinator independently
+redecoded all3 archives and confirmed equality. Inferencecancel requested after
+22frames, statecanceled andbothroutes404; this doesnotprove OSencoderexit.
+Extraction-ownedPopenexit is separatelychecked byverifier. Proxycorrespondence is
+metadata-only, not exactindependent/serverproxy sourcepixels. Report:
+.runtime/clip-verification/consistency-followup/20261018T222230Z-0e510fba/report.json.
+APIindependent.json and5terminaljobrecords saved undergpu-consistency-followup.
+OwnedGPUAPI gracefullystopped afteraccounting; originalservices jobcounts39/16/3/1
+unchanged andidle. Whole-deviceafterstop2910MiB/0%; notaprocessVRAMceiling.
+
+Documentation reconciled inREADME,ROADMAP,HANDOFF and diagnosticplan. Fresh
+synthetic strictgate passes; originalfailedreport remains preserved. Universal
+GPUdeterminism/realfootagequality/longstress/physicaldisplay notestablished.
+Nextboundedwork: representative-media/reliability validation and deeper stereo
+A/B; intermittent model/codecvariance remains tracked. Reusabledepth4.2 needs its
+own frozen cacheformat/quota/invalidation spec; actualrecovery/projects remain
+separate. No workers or owned QA servers remain active.

@@ -1,23 +1,75 @@
 # StereoLab roadmap handoff — 18 October 2026
 
-## Resume here
+## Current checkpoint — history integrated; fresh GPU clip gate passed
 
-User asked to commit, then continue the roadmap until approaching the usage limit
-and write a handoff. This bounded run is complete; the roadmap is unfinished.
-Observed closing usage:83% five-hour/58%weekly. No reset credit was used.
+Repository D:\Users\Hp\Documents\ChatGPT\3d, branch master, HEAD `20709ff`
+(dark UI polish). The Phase 4.1 application integration is implemented and
+verified in the working tree, uncommitted. GPU consistency diagnostics and the
+strict clip verifier have also been improved and verified. Earlier documentation changes and
+output/ mockups were preserved. No push or EXE rebuild was requested.
 
-Repository: D:\Users\Hp\Documents\ChatGPT\3d, branch master.
-Commits: fbab918 contains the previous roadmap wave; a130916 commits the remaining
-Windows packaging setup. The tree was clean immediately after a130916. This
-continuation's 20 changed/new files remain uncommitted. Nothing was pushed.
-The executable was not rebuilt and does not contain the latest source changes.
+Opt-in `STEREOLAB_HISTORY_INSTANCE` is now active at ASGI startup. The app owns
+the worker lifetime and holds SQLite/lease ownership until cancellation and
+worker join finish. Ordinary exports have streamed source hashes, capacity
+checks and durable admission/settings/naming/lifecycle boundaries. Status and
+read-only prior-launch history/download APIs feed the new history UI. Sources,
+queue order and processing state are not restored or automatically requeued.
 
-Earlier detailed evidence is preserved in:
-- .runtime/continuation-verification/handoff-before-continue.md
-- .runtime/resume-verification/handoff-before-resume.md
-- ROADMAP.md, PROGRESS.md and the plans/ specs.
+Latest independent suites: CPU 380 tests in 11.991s and GPU environment 380 in
+11.624s, both OK with one existing Windows real-symlink privilege skip. Logs:
+.runtime/gpu-consistency-followup/full-cpu.log and full-gpu.log. Node syntax,
+Python compilation and whitespace checks passed. The earlier history-only
+364-test suites remain in .runtime/history-coordinator-*-final.log.
+The initial full-suite fixture failure is retained separately in
+.runtime/history-coordinator-cpu-tests.log; its mock now produces an owned output.
 
-## Running services — preserve existing download URLs
+Isolated CPU acceptance completed a generated still, canceled a controlled active
+image, left a pending record, then gracefully restarted: prior success downloaded
+with identical bytes, pending became interrupted, source SHA256/size matched,
+current JOBS stayed empty and a concurrent second owner was rejected. Evidence:
+.runtime/history-restart-verification/25c0413df33040f08bfa829e36d733e8/report.json.
+The controlled image waited for production cancellation; this is not long-video
+or GPU execution proof. Browser settings reuse left source empty/convert disabled,
+history refresh worked, no console warnings/errors, and 320/391px layouts had no
+document overflow. Screenshot history-browser.png is beside the report.
+
+History QA did not contact existing services. GPU follow-up used read-only
+status/job guards; none were restarted or stopped. The isolated browser server
+was stopped after QA; its evidence persists and its temporary tab is closed.
+Older live backends and the existing EXE do not gain the new Python behavior
+without a separately accounted-for launch. Historical service inventories below
+must be refreshed before any future service action.
+
+GPU consistency follow-up: exact preprocessed tensors matched across all repeat
+pairs; CPU stages were exact, while both fresh cold and one-frame-warmed GPU
+processes showed small raw-output variation. One warmup is not a proven fix.
+Per-repeat encoding showed libx264 amplification up to decoded max19/mean.005891;
+the tested NVENC pairs decoded identically. Original failed NVENC max29 was not
+reproduced or explained by these diagnostics. Independent output hashes/decodes:
+.runtime/gpu-consistency-followup/independent-audit.json.
+
+Verifier fixes require clip-to-both-export comparisons (tolerances are not
+transitive) and reject missing public execution evidence. Unchanged GPU bounds
+are max1/mean.001. On a NEW private GPU API, full generated source, processed clip,
+two matched exports and cancellation completed: all three 36-frame decoded pairs
+were exactly equal. Report:
+.runtime/clip-verification/consistency-followup/20261018T222230Z-0e510fba/report.json.
+Independent decode: .runtime/gpu-consistency-followup/api-independent.json.
+Five terminal jobs (four complete, one canceled) were saved before stopping owned
+PID34376/port56485. Existing APIs were guarded read-only and job counts unchanged.
+The preserved earlier failed report remains historical counterevidence; this
+fresh passing synthetic run does not establish universal determinism or real-media
+quality. Proxy correspondence was checked by metadata, not exact source pixels.
+
+Next: investigate intermittent raw/codec variance and continue real-media/reliability
+validation. Phase 4.1 project/source-retention work, reusable depth (4.2),
+checkpoints/resume (4.3), broader customization and clean-machine delivery remain
+separate bounded slices. Do not promote either quality prototype without evidence.
+
+The sections below preserve earlier evidence; current integration supersedes the
+old standalone-foundation status and earlier next-step instructions.
+
+## Historical running services — preserve existing download URLs
 
 | Port | Ownership and last check |
 | --- | --- |
@@ -110,10 +162,11 @@ Independent check: continuation-verification/cpu-variance-independent.json.
 These observations do not establish preprocessed tensor identity, universal GPU
 determinism, or a production warmup/comparison policy. App defaults were unchanged.
 
-## Phase4.1 storage foundation — NOT wired into the app
+## Historical Phase4.1 foundation — before application integration
 
-job_history.py is a standalone opt-in SQLite metadata store. Current app jobs
-still disappear after a server restart; the proposed environment variable/API/UI
+At this earlier checkpoint job_history.py was a standalone opt-in SQLite metadata
+store. The following describes that checkpoint, superseded above. App jobs then
+still disappeared after a server restart; the proposed environment variable/API/UI
 in plans/job-history.md are not active app features. No sources are retained,
 read or deleted by the module, and no Job/queue objects are reconstructed.
 
@@ -141,7 +194,7 @@ writes and degraded status mapping; separate prior-boot read-only API/UI. Then
 verify an isolated CPU server restart/download end to end. Never revive old JOBS,
 automatically requeue, retain sources implicitly or claim arbitrary-frame resume.
 
-## Final independent checks
+## Earlier independent checks
 
 CPU:350 tests in11.661s, OK with one skipped real symlink-creation test.
 GPU environment:350 tests in11.766s, same expected skip. No remaining failures.
@@ -153,9 +206,10 @@ history module's in-progress red stubs and are superseded by these final logs.
 The suites contain mocked neural sessions plus real CPU/FFmpeg/process checks;
 real DirectML evidence is separate above. No new EXE build, clean-machine test,
 physical display proof, multi-hour reliability or universal quality claim.
-All worker lanes are released. Preserve all20 changed/new source/docs/tests.
+At the previous handoff all worker lanes were released and the20 changed/new
+source/docs/tests were ready for the separately documented `cba8716` commit.
 
-## Next roadmap gates
+## Earlier roadmap gates (first gate now completed)
 
 1. Integrate the standalone history foundation under its frozen failure/ownership
    contract, with a separate read-only history UI and explicit source reselection.

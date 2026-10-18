@@ -6,9 +6,12 @@ import numpy as np
 
 from scripts.verify_clip_preview import (
     checked_submit,
+    classify_pixel_gate,
     compare_decoded_frames,
     cancellation_progress_reached,
     require_versioned_clip_capability,
+    require_export_execution,
+    require_pixel_gate_passed,
     validate_clip_bounds,
 )
 
@@ -89,6 +92,42 @@ class ClipRunnerContractTests(unittest.TestCase):
         self.assertFalse(cancellation_progress_reached({"state": "processing", "frames_processed": 1}))
         self.assertFalse(cancellation_progress_reached({"state": "queued", "frames_processed": 3}))
         self.assertTrue(cancellation_progress_reached({"state": "processing", "frames_processed": 2}))
+
+    def test_nontransitive_gpu_tolerance_requires_clip_to_match_both_exports(self):
+        reference = np.full((1, 20, 50, 3), 128, dtype=np.uint8)
+        repeat, clip = reference.copy(), reference.copy()
+        repeat[0, 0, 0, 0], clip[0, 0, 0, 0] = 129, 127
+        self_variation = compare_decoded_frames(reference, repeat, "gpu")
+        comparison = compare_decoded_frames(clip, reference, "gpu")
+        repeat_comparison = compare_decoded_frames(clip, repeat, "gpu")
+        self.assertTrue(self_variation["passed"])
+        self.assertTrue(comparison["passed"])
+        self.assertFalse(repeat_comparison["passed"])
+        self.assertEqual(repeat_comparison["max_abs_difference"], 2)
+        conclusion = classify_pixel_gate(self_variation, comparison, repeat_comparison)
+        self.assertEqual(conclusion["status"], "failed")
+        with self.assertRaisesRegex(RuntimeError, "Pixel gate failed"):
+            require_pixel_gate_passed(conclusion)
+
+    def test_pixel_gate_preserves_inconclusive_precedence_and_terminal_failure(self):
+        conclusion = classify_pixel_gate({"passed": False}, {"passed": False}, {"passed": True})
+        self.assertEqual(conclusion["status"], "inconclusive")
+        with self.assertRaisesRegex(RuntimeError, "Pixel gate inconclusive"):
+            require_pixel_gate_passed(conclusion)
+        passed = classify_pixel_gate({"passed": True}, {"passed": True}, {"passed": True})
+        self.assertEqual(passed["status"], "passed")
+        require_pixel_gate_passed(passed)
+
+    def test_export_requires_public_purpose_device_and_execution_proof(self):
+        valid = {"purpose": "export", "execution_mode": "gpu", "execution": {
+            "active_provider": "DmlExecutionProvider", "gpu_verified": True, "fallback_reason": None}}
+        self.assertEqual(require_export_execution(valid, "gpu"), valid["execution"])
+        invalid = ({}, {**valid, "purpose": "preview_clip"}, {**valid, "execution_mode": "cpu"},
+                   {**valid, "execution": {}}, {**valid, "execution": {
+                       **valid["execution"], "fallback_reason": "GPU failed"}})
+        for job in invalid:
+            with self.subTest(job=job), self.assertRaises(RuntimeError):
+                require_export_execution(job, "gpu")
 
 
 if __name__ == "__main__":

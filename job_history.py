@@ -370,6 +370,11 @@ class HistoryStore:
         if self._connection is None or (write and self._degraded):
             raise HistoryUnavailable('History is disabled, closed or degraded; no durable change was accepted.')
 
+    def mark_degraded(self):
+        """Latch an application persistence failure without affecting live work."""
+        with self._lock:
+            self._degraded = True
+
     @contextmanager
     def _transaction(self):
         with self._lock:
@@ -453,6 +458,11 @@ class HistoryStore:
                 (record['job_id'], self.boot_id, record['created_at'], record['updated_at'], 'queued', text))
         return copy.deepcopy(record)
 
+    def check_capacity(self):
+        """Reject before upload staging; admission rechecks in its transaction."""
+        with self._transaction() as connection:
+            self._prune(connection, reserve=1)
+
     def edit_pending(self, job_id, *, settings=_UNCHANGED, output_name_template=_UNCHANGED):
         with self._transaction() as connection:
             record = self._current(job_id, {'queued'})
@@ -512,6 +522,7 @@ class HistoryStore:
         result.pop('boot_id')
         output = result.pop('output')
         result.update(readonly=True, source_available=False, requires_source_reselection=True,
+                      completed_at=record['updated_at'] if record['state'] == 'completed' else None,
                       output_name=output['name'] if output else None, output_available=self._output_path(record) is not None)
         return result
 
