@@ -1,0 +1,8 @@
+# DirectML includes both GPU and CPU providers. Do not install onnxruntime or
+# onnxruntime-gpu into the same environment: they share the Python module name.
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+python-multipart>=0.0.20,<1
+numpy>=1.26,<3
+opencv-python>=4.10,<6
+onnxruntime-directml==1.24.4

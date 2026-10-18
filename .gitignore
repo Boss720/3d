@@ -1,0 +1,8 @@
+.runtime/
+outputs/
+__pycache__/
+*.py[cod]
+.venv/
+.venv-gpu/
+venv/
+*.onnx
