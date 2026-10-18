@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "description": "Small deterministic pipeline fixtures. These synthetic patterns support reproducibility and format checks; they are not visual-quality ground truth.",
+  "fixtures": [
+    {
+      "id": "synthetic-detail-landscape",
+      "source": {
+        "kind": "synthetic_image",
+        "width": 320,
+        "height": 180,
+        "pattern": "fine_detail",
+        "seed": 17
+      }
+    },
+    {
+      "id": "synthetic-motion-landscape",
+      "source": {
+        "kind": "synthetic_video",
+        "width": 160,
+        "height": 96,
+        "fps": 8,
+        "frames": 8,
+        "pattern": "motion",
+        "seed": 23,
+        "audio": false
+      }
+    },
+    {
+      "id": "synthetic-hard-cut",
+      "source": {
+        "kind": "synthetic_video",
+        "width": 160,
+        "height": 96,
+        "fps": 8,
+        "frames": 8,
+        "pattern": "hard_cut",
+        "seed": 31,
+        "audio": false
+      }
+    },
+    {
+      "id": "synthetic-portrait",
+      "source": {
+        "kind": "synthetic_image",
+        "width": 96,
+        "height": 160,
+        "pattern": "portrait",
+        "seed": 47
+      }
+    },
+    {
+      "id": "synthetic-audio-timing",
+      "source": {
+        "kind": "synthetic_video",
+        "width": 160,
+        "height": 96,
+        "fps": 8,
+        "frames": 8,
+        "pattern": "hard_cut",
+        "seed": 59,
+        "audio": true,
+        "audio_frequency_hz": 440
+      }
+    }
+  ]
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from contextlib import nullcontext
 from collections.abc import Callable, Iterable
 from typing import TypeVar
 
@@ -27,6 +28,7 @@ def run_pipeline(
     consume: Callable[[Frame, Value], None],
     cancel_event: threading.Event,
     queue_size: int = 2,
+    timings=None,
 ) -> int:
     """Process frames in order with exactly one inference call at a time.
 
@@ -69,23 +71,27 @@ def run_pipeline(
         stop.set()
 
     def put(target: queue.Queue, item: object) -> None:
-        while True:
-            check_running()
-            try:
-                target.put(item, timeout=_POLL_SECONDS)
-                return
-            except queue.Full:
-                pass
+        name = 'queue_decode_put' if target is decoded else 'queue_render_put'
+        with timings.measure(name) if timings is not None else nullcontext():
+            while True:
+                check_running()
+                try:
+                    target.put(item, timeout=_POLL_SECONDS)
+                    return
+                except queue.Full:
+                    pass
 
     def get(target: queue.Queue):
-        while True:
-            check_running()
-            try:
-                item = target.get(timeout=_POLL_SECONDS)
+        name = 'queue_decode_get' if target is decoded else 'queue_render_get'
+        with timings.measure(name) if timings is not None else nullcontext():
+            while True:
                 check_running()
-                return item
-            except queue.Empty:
-                pass
+                try:
+                    item = target.get(timeout=_POLL_SECONDS)
+                    check_running()
+                    return item
+                except queue.Empty:
+                    pass
 
     def produce() -> None:
         iterator = None

@@ -21,7 +21,7 @@ class AppTests(unittest.TestCase):
         self.folder.mkdir(parents=True)
         self.outputs = patch.object(main, 'OUTPUTS', self.folder)
         self.outputs.start()
-        self.client = TestClient(main.app)
+        self.client = TestClient(main.app, base_url='http://127.0.0.1')
         self.frame = np.zeros((46, 66, 3), np.uint8)
         self.frame[:, :, 0] = np.linspace(0, 255, 66, dtype=np.uint8)
         self.frame[12:35, 20:45] = (80, 150, 230)

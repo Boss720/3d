@@ -1,5 +1,9 @@
 # StereoLab independent critique brief
 
+> Historical snapshot, preserved for critique context. The HEAD/worktree statements
+> and measurements below describe preparation time, not the current checkout.
+> Current source, README.md and dated PROGRESS.md entries govern runtime behavior.
+
 **Prepared:** 18 October 2026
 **Repository:** `D:\Users\Hp\Documents\ChatGPT\3d`
 **Current HEAD:** `79379af` — `Improve conversion speed and ETA reporting`

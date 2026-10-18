@@ -13,6 +13,7 @@ import importlib
 import json
 import os
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -31,6 +32,16 @@ GPU_PROVIDER = 'DmlExecutionProvider'
 EXECUTION_MODES = ('auto', 'cpu', 'gpu', 'hybrid')
 GPU_MAX_INPUT_DIMENSION = 924
 LARGE_4GB_GPU_MAX_INPUT_DIMENSION = 518
+LIMITED_GPU_MEMORY_MB = 4096
+GPU_FAILURE_COOLDOWN_SECONDS = 60
+MAX_GPU_FAILURE_ENTRIES = 64
+RUNTIME_CAPABILITIES = {
+    'schema_version': 1, 'named_models_directml': True,
+    'gpu_max_input_dimension': GPU_MAX_INPUT_DIMENSION,
+    'large_limited_gpu_max_input_dimension': LARGE_4GB_GPU_MAX_INPUT_DIMENSION,
+    'limited_gpu_memory_mb': LIMITED_GPU_MEMORY_MB, 'unknown_memory_policy': 'limited',
+    'gpu_failure_cooldown_seconds': GPU_FAILURE_COOLDOWN_SECONDS, 'gpu_retry_supported': True,
+}
 
 
 MODEL_SPECS = {
@@ -79,12 +90,13 @@ class ModelManager:
         self._threads: dict[str, threading.Thread] = {}
         self._session: Any = None
         self._session_id: str | None = None
-        self._session_key: tuple[str, str, int | None] | None = None
-        self._gpu_failures: dict[tuple[str, str, int | None, int], str] = {}
+        self._session_key: tuple[str, str, str | None] | None = None
+        self._gpu_failures: dict[tuple[Any, ...], tuple[float, str]] = {}
         self._gpu_verified = False
         self._last_execution: dict[str, Any] = {
             'requested_mode': None, 'active_provider': None, 'device': None,
             'fallback_reason': None, 'gpu_verified': False,
+            'inference_succeeded': False,
         }
 
     @staticmethod
@@ -126,13 +138,15 @@ class ModelManager:
                     'gpu_name': adapter['name'] if adapter else None, 'gpu_device': copy.deepcopy(adapter),
                     'gpu_error': gpu_error, 'adapters': copy.deepcopy(hardware['adapters']),
                     'last_execution': last,
-                    'gpu_memory_policy': 'Best effort: all named models may try DirectML. Large is limited to a 518 px long side on adapters with 4 GB or less; Auto/Hybrid fall back to CPU after GPU failures. DirectML has no hard VRAM limit; CPU nodes may remain.'}
+                    'capabilities': dict(RUNTIME_CAPABILITIES),
+                    'gpu_memory_policy': 'Best effort: all named models may try DirectML. Large is limited to a 518 px long side on adapters with 4 GB or less or unknown memory; Auto/Hybrid fall back to CPU after GPU failures and retry after 60 seconds or a manual reset. DirectML has no hard VRAM limit; CPU nodes may remain.'}
         except Exception as exc:
             return {'available': False, 'providers': [], 'active_provider': last['active_provider'],
                     'device': last['device'], 'version': None, 'error': str(exc),
                     'gpu_available': False, 'gpu_verified': self._gpu_verified,
                     'gpu_name': adapter['name'] if adapter else None, 'gpu_device': copy.deepcopy(adapter),
-                    'gpu_error': str(exc), 'adapters': copy.deepcopy(hardware['adapters']), 'last_execution': last}
+                    'gpu_error': str(exc), 'adapters': copy.deepcopy(hardware['adapters']), 'last_execution': last,
+                    'capabilities': dict(RUNTIME_CAPABILITIES)}
 
     def execution_info(self) -> dict[str, Any]:
         """Snapshot of the most recent inference, including any CPU fallback reason."""
@@ -156,11 +170,34 @@ class ModelManager:
 
     @staticmethod
     def _gpu_input_limit(model_id: str, adapter: dict[str, Any] | None) -> int:
-        """Keep Large's activation footprint lower on 4 GB-class adapters."""
-        memory_mb = int((adapter or {}).get('memory_mb', 0) or 0)
-        if model_id == 'depth-anything-v2-large' and 0 < memory_mb <= 4096:
+        """Treat unknown, zero or invalid dedicated memory as limited memory."""
+        try:
+            memory_mb = float((adapter or {}).get('memory_mb') or 0)
+        except (TypeError, ValueError, OverflowError):
+            memory_mb = 0
+        if model_id == 'depth-anything-v2-large' and not (np.isfinite(memory_mb) and memory_mb > LIMITED_GPU_MEMORY_MB):
             return LARGE_4GB_GPU_MAX_INPUT_DIMENSION
         return GPU_MAX_INPUT_DIMENSION
+
+    def reset_gpu_failures(self) -> None:
+        """Allow fresh GPU attempts after current inference, preserving its session."""
+        with self._inference_lock:
+            self._gpu_failures.clear()
+
+    def _prune_gpu_failures(self) -> None:
+        now = time.monotonic()
+        for key, (expires_at, _) in list(self._gpu_failures.items()):
+            if expires_at <= now:
+                self._gpu_failures.pop(key, None)
+        while len(self._gpu_failures) > MAX_GPU_FAILURE_ENTRIES:
+            self._gpu_failures.pop(next(iter(self._gpu_failures)))
+
+    def _gpu_failure_key(self, model_id: str, adapter: dict[str, Any] | None,
+                         input_size: int, frame: np.ndarray) -> tuple[Any, ...]:
+        # DXGI ordinal alone can refer to a different physical adapter later.
+        return (model_id, self._spec(model_id)['sha256'], GPU_PROVIDER,
+                json.dumps(adapter, sort_keys=True, default=str), input_size,
+                tuple(frame.shape[:2]), self._gpu_input_limit(model_id, adapter))
 
     def _accepted(self, model_id: str) -> bool:
         spec = self._spec(model_id)
@@ -351,7 +388,8 @@ class ModelManager:
         return session
 
     @staticmethod
-    def _input_size(session: Any, height: int, width: int, model_id: str, input_size: int, max_dimension: int | None = None) -> tuple[int, int]:
+    def _input_size(session: Any, height: int, width: int, model_id: str, input_size: int, max_dimension: int | None = None,
+                    enforce_supported: bool = True) -> tuple[int, int]:
         inputs = session.get_inputs()
         if len(inputs) != 1 or len(inputs[0].shape) != 4 or inputs[0].type != "tensor(float)":
             raise RuntimeError("Depth model must accept one float32 NCHW image tensor.")
@@ -374,7 +412,7 @@ class ModelManager:
         out_w = shape[3] if isinstance(shape[3], int) else out_w
         if max_dimension is not None and max(out_h, out_w) > max_dimension:
             raise RuntimeError('Fixed model input dimensions exceed the GPU memory policy.')
-        if not 1 <= out_h <= 4096 or not 1 <= out_w <= 4096:
+        if enforce_supported and (not 1 <= out_h <= 4096 or not 1 <= out_w <= 4096):
             raise RuntimeError("Depth model input dimensions exceed the supported size.")
         return out_h, out_w
 
@@ -411,13 +449,19 @@ class ModelManager:
             raise ValueError("Depth inference needs a nonempty uint8 BGR image.")
         with self._inference_lock:
             provider, adapter, reason = self._execution_plan(model_id, execution_mode, self.runtime_info())
-            gpu_key = (model_id, GPU_PROVIDER, adapter['id'] if adapter else None, input_size)
+            gpu_key = self._gpu_failure_key(model_id, adapter, input_size, frame_bgr)
+            self._prune_gpu_failures()
             if provider == GPU_PROVIDER and execution_mode != 'gpu' and gpu_key in self._gpu_failures:
-                provider, adapter, reason = CPU_PROVIDER, None, self._gpu_failures[gpu_key]
+                provider, adapter, reason = CPU_PROVIDER, None, self._gpu_failures[gpu_key][1]
             with self._lock:
                 self._last_execution = {'requested_mode': execution_mode, 'model_id': model_id,
                                         'active_provider': None, 'device': None,
-                                        'fallback_reason': reason, 'gpu_verified': False}
+                                        'fallback_reason': reason, 'gpu_verified': False,
+                                        'requested_device': execution_mode, 'requested_input_size': input_size,
+                                        'source_width': frame_bgr.shape[1], 'source_height': frame_bgr.shape[0],
+                                        'requested_input_width': None, 'requested_input_height': None,
+                                        'input_width': None, 'input_height': None,
+                                        'input_size_limit': None, 'inference_succeeded': False}
             try:
                 try:
                     depth = self._run(frame_bgr, model_id, input_size, provider, adapter)
@@ -425,7 +469,9 @@ class ModelManager:
                     if provider != GPU_PROVIDER:
                         raise
                     reason = f'GPU DirectML inference failed: {exc}'
-                    self._gpu_failures[gpu_key] = reason
+                    self._gpu_failures.pop(gpu_key, None)
+                    self._gpu_failures[gpu_key] = (time.monotonic() + GPU_FAILURE_COOLDOWN_SECONDS, reason)
+                    self._prune_gpu_failures()
                     self._session = None
                     self._session_key = None
                     self._session_id = None
@@ -443,6 +489,7 @@ class ModelManager:
                         'active_provider': provider, 'device': adapter['name'] if adapter else 'CPU',
                         'device_id': adapter['id'] if adapter else None, 'fallback_reason': reason,
                         'gpu_verified': provider == GPU_PROVIDER,
+                        'inference_succeeded': True,
                         'cpu_nodes_possible': provider == GPU_PROVIDER,
                         'input_size_limit': self._gpu_input_limit(model_id, adapter) if provider == GPU_PROVIDER else None,
                     })
@@ -460,30 +507,55 @@ class ModelManager:
             return depth, self.execution_info()
 
     def _run(self, frame: np.ndarray, model_id: str, input_size: int, provider: str, adapter: dict[str, Any] | None) -> np.ndarray:
-        key = (model_id, provider, adapter['id'] if adapter else None)
-        if self._session_key != key:
-            self._session = None
-            self._session_id = None
-            self._session_key = None
-            if self._hash(self._path(model_id)) != self._spec(model_id)["sha256"]:
-                self._quarantine(self._receipt(model_id))
-                with self._lock:
-                    self._states[model_id] = {"state": "failed", "progress": 0, "error": "Installed model failed SHA256 verification. Reinstall the model."}
-                raise RuntimeError("Installed model failed SHA256 verification. Reinstall the model.")
-            self._session = (self._new_session(self._path(model_id), provider=provider, device_id=adapter['id'])
-                             if adapter else self._new_session(self._path(model_id)))
-            if hasattr(self._session, 'disable_fallback'):
-                self._session.disable_fallback()
-            if provider == GPU_PROVIDER and provider not in self._session.get_providers():
-                self._session = None
-                raise RuntimeError(f'{provider} is absent from the created session; ONNX Runtime silently fell back to CPU.')
-            self._session_id = model_id
-            self._session_key = key
         input_limit = self._gpu_input_limit(model_id, adapter) if adapter else None
-        result = self._predict_with_session(self._session, frame, model_id, input_size, input_limit)
-        if provider == GPU_PROVIDER and provider not in self._session.get_providers():
-            raise RuntimeError(f'{provider} is no longer active after inference.')
+        with self._lock:
+            self._last_execution.update({'attempted_provider': provider, 'input_size_limit': input_limit,
+                                         'adapter': copy.deepcopy(adapter), 'input_width': None, 'input_height': None,
+                                         'active_provider': None, 'device': adapter['name'] if adapter else 'CPU',
+                                         'device_id': adapter['id'] if adapter else None})
+        key = (model_id, provider, json.dumps(adapter, sort_keys=True, default=str) if adapter else None)
+        session_reused = self._session_key == key
+        with self._lock:
+            self._last_execution.update({'session_reused': session_reused,
+                                         'session_initialization_seconds': 0.0,
+                                         'inference_pipeline_seconds': None})
+        if self._session_key != key:
+            initialization_started = time.perf_counter()
+            try:
+                self._session = None
+                self._session_id = None
+                self._session_key = None
+                if self._hash(self._path(model_id)) != self._spec(model_id)["sha256"]:
+                    self._quarantine(self._receipt(model_id))
+                    with self._lock:
+                        self._states[model_id] = {"state": "failed", "progress": 0, "error": "Installed model failed SHA256 verification. Reinstall the model."}
+                    raise RuntimeError("Installed model failed SHA256 verification. Reinstall the model.")
+                self._session = (self._new_session(self._path(model_id), provider=provider, device_id=adapter['id'])
+                                 if adapter else self._new_session(self._path(model_id)))
+                if hasattr(self._session, 'disable_fallback'):
+                    self._session.disable_fallback()
+                if provider == GPU_PROVIDER and provider not in self._session.get_providers():
+                    self._session = None
+                    raise RuntimeError(f'{provider} is absent from the created session; ONNX Runtime silently fell back to CPU.')
+                self._session_id = model_id
+                self._session_key = key
+            finally:
+                with self._lock:
+                    self._last_execution['session_initialization_seconds'] = max(0.0, time.perf_counter() - initialization_started)
+        requested_h, requested_w = self._input_size(self._session, *frame.shape[:2], model_id, input_size,
+                                                  enforce_supported=False)
+        with self._lock:
+            self._last_execution.update({'requested_input_width': requested_w, 'requested_input_height': requested_h,
+                                         'active_provider': provider})
         out_h, out_w = self._input_size(self._session, *frame.shape[:2], model_id, input_size, input_limit)
         with self._lock:
             self._last_execution.update({'input_width': out_w, 'input_height': out_h})
+        inference_started = time.perf_counter()
+        try:
+            result = self._predict_with_session(self._session, frame, model_id, input_size, input_limit)
+        finally:
+            with self._lock:
+                self._last_execution['inference_pipeline_seconds'] = max(0.0, time.perf_counter() - inference_started)
+        if provider == GPU_PROVIDER and provider not in self._session.get_providers():
+            raise RuntimeError(f'{provider} is no longer active after inference.')
         return result

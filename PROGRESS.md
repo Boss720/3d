@@ -273,3 +273,304 @@ Final verification: all 75 unit tests pass in both `.venv` and `.venv-gpu`;
 `py_compile`, `node --check static/app.js`, and `git diff --check` pass. The local
 server is running at `http://127.0.0.1:8766/`. The implementation and its independent
 critique brief are included in the follow-up commit after this verification.
+
+## Roadmap continuation — 18 October 2026
+
+Current baseline: branch `master`; existing modified `.gitignore`, `README.md`,
+`main.py` and untracked `ROADMAP.md`, `StereoLab.spec`, `build-exe.ps1` are retained.
+The roadmap is the authorized backlog; earlier evidence remains historical.
+
+Frozen first batch: versioned GPU capabilities and conservative unknown-memory
+policy; bounded GPU failure suppression and explicit retry; reproducible benchmark
+records; bounded preview-depth reuse; stage timing and phased ETA integration.
+Accept only semantic tests and independently verified results. Do not claim long
+exports, exact VRAM peaks, or visual superiority from mocked tests.
+
+Exclusive ownership for the first wave:
+- Runtime worker: `depth_engine.py`, `tests/test_depth_engine.py` only. Capability
+  schema v1, retry/reset method, bounded failure suppression, unknown-memory tests.
+- Frontend worker: `static/app.js`, `static/index.html`, `static/style.css`,
+  `tests/test_frontend_contract.py` only. Consume capability v1, GPU retry, truthful
+  stale-backend handling; keep current preview response revision guard.
+- Benchmark worker: `benchmarking.py`, `scripts/benchmark_roadmap.py`,
+  `tests/test_benchmarking.py`, `benchmarks/manifest.json` only. Reproducible local
+  fixture identity, repeats/median/range, output verification and environment data.
+- Coordinator: `main.py`, new cache/telemetry helpers and tests, docs. Integrate retry,
+  timing, preview reuse and benchmark schema; run CPU/GPU suites and live checks.
+
+Capability contract agreed before dispatch: `runtime.capabilities` contains
+`schema_version: 1`, `named_models_directml: true`, `gpu_max_input_dimension: 924`,
+`large_limited_gpu_max_input_dimension: 518`, `limited_gpu_memory_mb: 4096`,
+`unknown_memory_policy: "limited"`, `gpu_failure_cooldown_seconds: 60`, and
+`gpu_retry_supported: true`. Retry endpoint: POST `/api/runtime/gpu/reset`, returns
+`{"reset": true}`. Reset clears suppression without replacing a running inference.
+Benchmark consumes `/api/jobs` timing fields when present and explicitly records
+missing values. Initial manifest is synthetic and not representative visual proof.
+
+### First batch integration checkpoint
+
+Coordinator independently ran CPU and GPU environment suites: 126 tests pass in
+both, JS syntax and whitespace checks pass. This is the current test checkpoint,
+not the final handoff gate. The live GPU smoke on isolated port 8768 passed image,
+depth/RGB-D, eight-frame video dimensions/FPS/audio/duration and cancellation.
+First smoke comparison differed in one channel of one pixel by one 8-bit level;
+rerun matched exactly. Smoke now reports actual differences and allows only sparse
+one-level DirectML rounding (max <=1, mean <=0.001); CPU comparison stays exact.
+
+Independent review found and fixed a preview/export admission race by gating the
+processing transition through the preview lock. The engine already serialized
+inference. Non-NVIDIA DirectML adapter cap display was aligned with backend policy.
+Queue waits now have separate counters/timers; they include operation overhead
+and overlap stage work. An initial test TempDirectory failed with sandbox ACL
+WinError 5; ordinary inherited-ACL test directories work. Inaccessible generated
+`.runtime/tmpbuy6m3w4` is left untouched.
+
+Measured Phase 1.2 slice: DEPTH/RGB-D skip unused eye synthesis via render_output.
+Alternating four retained samples per variant, 1920x1080 synthetic approximation,
+full decode-to-PNG path: DEPTH medians 0.320607 vs 0.277169 s; RGB-D 0.335090 vs
+0.312955 s. Exact PNG SHA256 agrees for all variants. Report:
+`.runtime/render-benchmark/alternating.json`; runner:
+`scripts/benchmark_render_outputs.py`. Does not measure API/queue/preflight/download.
+Other allocation/grid optimizations remain unimplemented pending profiling.
+
+Next bounded work: finish reproducible benchmark live runs and independent runtime
+regressions, then Phase 1.3 calibration foundation and Phase 3.2 validated presets.
+Calibration must be opt-in with a visible finite time budget, never change quality
+settings silently, separate depth-input evidence from whole-export/encoder claims,
+and report budget overruns if a single uninterruptible inference takes too long.
+Presets must display exact settings and schema-validate imports/exports; no invented
+speed rankings. Quality algorithm changes remain gated by matched fixtures/review.
+
+## Final roadmap continuation handoff — 18 October 2026
+
+Completed this bounded run near the usage limit; the remaining roadmap is explicit
+in HANDOFF.md and the ROADMAP.md execution-status table. No commits or staging.
+Preserved all earlier packaging changes; existing dist executable was not rebuilt.
+
+Integrated: capabilities/retry/cooldown; raw preview LRU and export-admission gate;
+preflight; stage/queue/session/resource telemetry; recent ETA/finalization/retry;
+measured DEPTH/RGB-D optimization; budgeted opt-in detail calibration/history;
+strict presets/import/export; exact-frame split comparison and zoom/pan; local
+Host/Origin mutation boundary. Quality renderer and temporal-alignment experiments
+were tested, measured and visually reviewed but deliberately not promoted.
+
+Final independent suites: CPU 200/200 (3.585 s), GPU environment 200/200 (3.662 s).
+Raw logs `.runtime/roadmap-verification/final-{cpu,gpu}-tests.log`. Compilation,
+JS syntax and whitespace checks pass. Deprecation/CRLF warnings remain informational.
+Final latest-server DirectML smoke passed image/depth/RGB-D, eight-frame H.264/AAC
+video dimensions/FPS/duration and cancellation. One channel in one pixel differed
+by one 8-bit level between independent preview/export inference calls (recorded,
+not claimed exact). CPU image comparison remains exact. Calibration/cache report
+`.runtime/roadmap-verification/gpu.json` verified reuse, invalidation and real GPU
+inference; last calibration elapsed 1.782 s for its synthetic frame.
+
+Benchmark reports: approximation CPU 15 verified runs; Small CPU, GPU and hybrid
+15 each; another 15 CPU runs in the same ORT 1.24.4 GPU runtime to avoid conflating
+ORT 1.31.0 with device selection. Five fixtures, three repeats. Resource-enabled
+hybrid run verified three outputs, process snapshots and seven whole-device memory
+samples (207–375 MiB). Not process VRAM peaks or long-export proof. See HANDOFF.md
+for exact paths, matched-runtime caveats and earlier-build report boundaries.
+
+Browser verified preset/dirty behavior, GPU retry, exact 400x240 source/depth A/B,
+125% synchronized zoom, correct side labels, complete calibration status and no
+input change before explicit Apply (256 stayed selected until Apply 384). Saved
+screenshot `.runtime/roadmap-verification/browser-preview.png`. Broad narrow-layout,
+keyboard and physical-display acceptance is still open.
+
+Experiments retained outside runtime: visibility renderer ~97–166 ms vs 2.9–3.8 ms;
+motion alignment ~28–30 ms vs 2.1–2.2 ms with mixed synthetic errors. No demonstrated
+real-video improvement; baseline renderer/filter remain selected. Source-aware raw
+normalization, full temporal clip preview, long all-model exports, full calibration,
+queue source-retention and durable projects/caches are next gated work.
+
+Live latest GPU app: http://127.0.0.1:8770, PID 12464, session 31019. Port 8768 and
+its 37 completed records/download URLs were preserved after a user export; it runs
+older backend code. Own idle CPU verification server 8769 was stopped. All worker
+lanes are released. See HANDOFF.md before continuing; do not restart active jobs.
+
+Final handoff usage check: 89% five-hour / 29% weekly. Untracked-file whitespace
+check found one extra EOF blank line in benchmarking.py; removed and rechecked.
+
+## Resumed roadmap wave — 18 October 2026
+
+Resume authorization retains the prior until-near-usage-limit/handoff objective.
+Starting usage: 0% five-hour / 30% weekly. Branch master / HEAD0c08d1a and all dirty
+packaging/roadmap changes preserved. Ports8768 and8770 live, idle; 8768 olderbackend
+37 completedrecords preserved, 8770 current backend five completedrecords. Other
+old ports unavailable. No restart of either existing server is authorized by this
+plan while it has active jobs or unaccounted outputs.
+
+Frozen wave: extend Phase0.1 with longer synthetic all-model exports + cancellation,
+and Phase3.1 with an explicit full-detail still check (bounded decoded dimensions,
+current proxy default retained, exact source comparison and current settings).
+This is not evidence of representative real-footage quality or multi-hour stability.
+A text question for a user-selected footage path is pending; synthetic work proceeds.
+
+Exclusive lanes:
+- Stress worker: scripts/stress_roadmap.py, benchmarks/stress-manifest.json,
+  tests/test_stress_roadmap.py; generated artifacts onlyunder .runtime/stress-verification.
+  Own all real GPU benchmark scheduling against idle8770 in this wave. Other lanes
+  must not run realGPU inference concurrently. Preserve user8768 outputrecords.
+- Preview backend worker: main.py, new preview_policy.py, tests/test_full_preview.py.
+  Add optional preview_detail proxy(default)/full; source fullimage capped12MP,
+  maxdimension8192, 24MiB upload. Full means no source downscale, not higher neural
+  input than hardware cap. Return original source dimensions, processing dimensions,
+  preview_detail, is_proxy; include policy in rawdepth cachekey. Keep defaultcallers,
+  admission/cancel/model/runtime contracts and CPUfallback truthful. Reject oversize
+  fullstills with actionable400/413 before expensive inference. Existing running
+  server stays untouched; unit verification uses mocked sessions/CPUapproximation.
+- Preview frontend worker: static/app.js,index.html,style.css,
+  tests/test_frontend_contract.py. Visible Proxy/Full-detail still selector; fullonly
+  decoded images, explicit12MP/8192 bound and GPUinputcap explanation; uploadoriginal
+  File forfullstill, JPEGcanvasforproxy. Return dimensions clearly. Detail changes
+  invalidate preview+calibration context; stale responses cannot replace current.
+- Coordinator: PROGRESS/HANDOFF/ROADMAP/README, reviewintegration and independent
+  CPU/GPUenv suites, idle-server scheduling, final evidence and next bounded spec.
+
+Contract preview fields: request preview_detail='proxy'|'full'; response source_width/
+source_height remain ACTUAL processingframe forA/B; original_width/original_height
+report decodedsource, preview_detail string, is_proxy bool. Fullvideo frames rejected
+by frontend; backend receives decodedstillframe so has no authority to infer its
+origin beyond uploadedimage. Fullsourcebudgetlimits do not impose a hard process
+memorypeak; neural dimensions are reported separately. Full entries may exceedthe
+32MiB cachebudget and then are intentionally not retained.
+
+Full-still wave integration: independent full suites pass in both environments:
+224 tests / CPU5.285s and GPUenv4.977s; node syntax and tracked whitespace pass.
+LiveCPU server8771 verifies original1200x640 vsproxy960x512 with approximationCPU.
+No GPU work was run by coordinator; stress lane retains exclusive inference use.
+
+Next frozen wave: plans/processed-clip-preview.md. Backend helper lane owns new
+preview_clip.py and tests/test_preview_clip.py only. Frontend lane owns static/*
+and tests/test_frontend_contract.py. Coordinator owns main.py integration,
+tests/test_clip_jobs.py, liveCPU validation and documentation. Stress lane retains
+its prior file and realGPU ownership. Extraction helper API frozen below:
+prepare_preview_clip(ffmpeg, source, destination, start_seconds, duration_seconds,
+source_fps, cancel_event, on_process=None, timeout_seconds=30.0) -> Path.
+ClipCancelled distinct from RuntimeError; helper registers Popen or None via
+on_process. Invalid interval/paths reject without mutation; unique destination
+must not preexist; only owned partial destination may be removed. Bound proxy
+960x540/24fps/120frames, optionalaudio, CPUlibx264. Main integrates purpose and
+explicit capability, same pipeline and source/proxy cleanup; UI requires capability
+before upload and rejects wrong-purpose response. FIFO, no priority/preemption.
+
+Clip integration checkpoint: 247 tests pass independently in each environment
+(CPU7.426s/GPUenv7.378s). Coordinator liveCPU8771 validates nonzero9s start,
+3s/36frames12fps640x180SBS with AACaudio and exactdecoded equality to ordinary
+export of matched extractedproxy (same smoothing.65/refinement/settings). Invalid
+40sstart failsbeforeinference. SmallCPU clip canceledafter2frames; bothclipvideo
+anddownload404. CurrentCPU serverbuild101dc031; generated scratchreports in
+.runtime/resume-verification. UI auditfixed durationchange stalecheck and status
+loaderror, with furtherpollrecovery auditunderway. Fullstillbrowser12MPbounded
+source/depthcomparison was checked and screenshot retained.
+
+Verification lane after stressrelease: new scripts/verify_clip_preview.py and
+new tests/test_clip_verification.py; generated .runtime/clip-verification only.
+Verify latestsource server8772(.venv-gpu,PID15152) explicitSmallGPU finiteclip,
+matchedproxyoutput/frame/audio check, realextraction andinferencecancellation,
+oldbackendrejection. No otherrealGPU lane active. Preserve8770/8768 unchanged.
+Coordinator owns allmain changesanddocs,frontendowns pollfixes untilrelease.
+
+Clip review correction: preflight now preserves finite positive sub-1 FPS and
+reports fps_provisional. Clip start validation does not reject timestamps using
+provisional30FPS fallback; extraction uses explicit24FPS fallback. Output proxy
+FPS must be measured before inference. Redtest .5FPS was30 and missingprovisional;
+15preflighttests+8clipjobtests green. GPU8772verification isstillloaded101dc031,
+prior tothis sourcecorrection; reportthatfingerprint truthfully.
+
+Next frozenqueuewave: plans/queue-workflow.md. Backendworkerexclusive main.py,
+newjob_queue.py,newjob_settings.py,tests/test_queue_jobs.py (namesmayomitunneeded
+helper). Frontendworkerexclusive static/app.js/index.html/style.css,
+tests/test_frontend_contract.py. Clipverificationworkerretains prior runner/tests
+andGPU8772. Coordinatoronlydocs/plans, independentchecks andnewlivequeueartifacts;
+no main/static edits untilownersrelease. Source retention remains explicitlyabsent.
+Queueorder/queuedsettings must reject worker-dequeue races andpreserveclip slots.
+
+Stresswave independentacceptance: coordinator decoded allfourretainedMP4s:
+360frames,640x180,12fps each. Report success4models and canceledstates verified;
+outputhashes independentlyrecomputed. Originalreportbuild1fd77b5a (priorroadmap
+baseline, not new fullstill/clip source). Modelwall Small75.02/Base133.11/
+MiDaS53.15/Large263.12seconds, requested518 with actual518x294exceptfixedMiDaS384.
+Device-widesamplemax566/938/1182/2025MiB; notprocessVRAM. Allrunframesare generated,
+notrepresentativerealfootage. Sourceuserpathquestion unanswered; no personalfiles
+searched. Successfulreport .runtime/stress-verification/20261018T110251Z-f0392917/report.json.
+
+Low-FPS extraction followup: generated.5FPS source showed shorter seeked video,
+and.1FPS produced an empty-stream container. Helper now uses minimum1FPS for
+sparse sources while keeping24FPS/120frame maximum; actualproxyframes/FPS/duration
+remain separatelyreported and maybeshorter thanrequested interval. Added real
+slowFPS case +argvexpectation: semanticred2failures, final13helpertests pass1.580s.
+No forcedtailpadding; no claimthatrequestedlength always equalsplayablelength.
+
+Queuewave integration checkpoint: completeCPU/GPUenv suites285tests green
+8.714s/8.853s, JSsyntax andtrackedwhitespace clean. Coordinatorreviewed queue/
+settings helpers, handlerlocking, modelreadiness/dequeue recheck andworkerstartup
+lock. Browser verified2readyfiles reorder, batchfreezestrength5, globalstrength0
+changesdidnotmutatesnapshots, submittedjobssnapshot5; duplicatenewreadyitemwith
+current0 andNOsubmission. RefreshdropsbrowserFiles andshowsreselectionrequired;
+validserversnapshotsremain. Live screenshot caughtmetadata squeezedbywideactions;
+frontendCSSfixunderway, notyetacceptedvisually. Liveatomicqueuemutationtestpending
+GPUverificationlane release (CPUvideoencodewoulduseNVENCconcurrently).
+
+GPUclipverification functionalmedia checks pass butencodedpixelgateFAILED;
+max40/mean.0024837 across12,441,600channels,10,576changed. Strictthresholdnotrelaxed.
+Workerdiagnosingordinaryrepeatvarianceandcompletingcancelcase independently.
+CPUmatchedproxyclip/export remains exactlyequal36decodedframes. Preservefailed
+reportandkeepGPUencodedidentityacceptanceexplicitlyopen.
+
+Final queue/output acceptance: correctedliveAPIrunner passes whileanordinarySmallCPU
+360frameexport runs tocompletion. Reorder C/A/B preservedclip slot2; activeedit+
+remove409, pendingBstrength0/refinementoff snapshotcommitted, Aremoved canceled+
+sourcefalse/download404, staleorder409. FinalBPNGexactlyduplicatessource. Rawreport
+.runtime/resume-verification/queue-live.json (latestbuild608134272b78059e5a4b5db83db00cd75ed3c08a4a8a242a2f8d2c019ca7ec23).
+First runnerusedPOSTondownloadGETroute andgot405afterothercheckspassed; corrected
+method, retainedfirst-attemptrecords andreranfullcheck successfully.
+
+Outputownership reviewfoundold8charIDcollisions andexistingtargetcleanup risk.
+Rootadded3semantic tests (red2fails), fullUUIDhexnames, exclusiveoutputreservation,
+andcleanupguardforownedtargets only; focused3+clip9green, backendindependent
+read-onlyreviewfoundnoregression. Existingoutputs neverrewritten/renamed. No naming
+templateUIyet. Final complete suites288tests: CPU9.055s/GPUenv9.130s, bothOK.
+
+QueueCSS initialappendhadliteralbackslash-n anddidnotparse; rootbrowsercomputedstyle
+caughtit. Correctedactualnewlines, reloadedandvisuallyaccepted530pxmetadatawidth+
+actionsbelow (35px/530px two-column grid at1265pxviewport); screenshotqueue-browser-fixed.png.
+Broadphysical/narrow-layout acceptance stillopen. Oldfailedscreenshotretained.
+
+GPUclipdiagnosis: secondreport20261018T113023Z-3a3457b7 recordsfunctionalmedia/
+cancelchecks; strictpixelgateoverallnonpassing/inconclusive, toleranceNOTrelaxed.
+Ordinary-vs-ordinary repeatedGPUH264 max29/mean.0016760706/5913changedchannels.
+Clipmatchessecondordinary EXACTacross36frames. Coordinatorindependentlydecodedall
+threeandverifiedthesemetrics (gpu-clip-independent.json). OwnedextractionFFmpegexit
+observed byworkerPID25844rc1+partialremoved+sourcehashpreserved; APIinferencecancel
+at23frames/canceled/bothroutes404 doesNOTproveOSencoderexit. Firstfailurepreserved.
+Reportloadedbuild101dc031, predatesqueue/outputownership/lowFPSfixes.
+
+LatestfreshGPU8772build608134272b... passesfull1200x640SmallDMLstill with exactsource
+pixels andseparatemodelinput252x140, plus1s12frame640x180clipwithAACaudioandstrictGPU
+nofallback. Reportlatest-gpu-smoke.json, PID14348/session36321. FinalCPUlow.5fps
+source nonzerostart clipcompletes asproxy1fps2frames; actual2s vsrequested3s explicitly
+reported (lowfps-live.json). No wholemovie/multihourqualityclaim.
+
+
+Closing resumed run: 85% five-hour / 43% weekly usage observed; no reset used.
+HANDOFF.md rewritten with completed slices, nonpassing GPU pixel gate, exact
+commands/reports, server ownership and next bounded work. All workers released.
+Own idle CPU8771 stopped after accounting for 11 terminal records. Latest GPU8772
+PID14348/session36321 retained with one completed clip, no active jobs, and source
+fingerprint independently confirmed to match loaded backend. User8768 (39 records
+at last check) and baseline8770 (16 records) preserved. Browser tab4 retained at
+latest8772. No commits/staging, executable rebuild, or broad cleanup performed.
+This until-near-limit-and-handoff run is complete; the roadmap remains unfinished.
+
+
+## User-requested roadmap commit
+
+User requested a commit after the handoff. Staged 58 roadmap source, test, fixture
+and documentation files. Preserved the pre-existing executable packaging edits
+unstaged: .gitignore, StereoLab.spec, build-exe.ps1 and packaging-only README/main
+hunks. Working files were not reverted. Exported the exact index to an isolated
+.runtime/commit-verification directory and independently ran both full suites:
+CPU 288 tests / 7.366s OK; GPU environment 288 tests / 7.258s OK. JavaScript syntax
+and staged whitespace pass. Generated media, weights, runtime state and binaries
+are excluded. This is a local source commit, with no push or EXE rebuild.

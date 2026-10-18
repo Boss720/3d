@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "name": "StereoLab Phase 0.1 generated long-video stress inventory",
+  "classification": "Generated synthetic fixture only; it is not licensed footage or representative real footage.",
+  "fixtures": [
+    {
+      "id": "stress-pan-thin-lowlight-cuts-audio-30s",
+      "tags": [
+        "generated_synthetic",
+        "30_second_video",
+        "landscape",
+        "low_light",
+        "animation",
+        "thin_detail",
+        "moving_thin_objects",
+        "camera_pan",
+        "hard_cuts",
+        "audio",
+        "not_licensed_footage"
+      ],
+      "source": {
+        "kind": "synthetic_video",
+        "generator": "stereolab-stress-v1",
+        "seed": 20261018,
+        "width": 320,
+        "height": 180,
+        "fps": 12,
+        "frames": 360,
+        "duration_seconds": 30.0,
+        "audio": true,
+        "audio_frequency_hz": 440,
+        "hard_cut_frames": [120, 240],
+        "low_light_frames": [240, 359],
+        "pan_pixels_per_frame": 2,
+        "thin_object_width_px": 1
+      }
+    }
+  ],
+  "models": [
+    "depth-anything-v2-small",
+    "depth-anything-v2-base",
+    "dpt-hybrid-midas",
+    "depth-anything-v2-large"
+  ],
+  "settings": {
+    "execution_mode": "gpu",
+    "input_size": 518,
+    "layout": "SBS",
+    "strength": 6.0,
+    "convergence": 0.5,
+    "resolution": "source",
+    "quality": "balanced",
+    "invert_depth": false,
+    "temporal_smoothing": 0.35,
+    "edge_refinement": true
+  }
+}

@@ -122,6 +122,15 @@ def pack_output(
     return result
 
 
+def render_output(frame: np.ndarray, depth: np.ndarray, strength: float,
+                  convergence: float, layout: str) -> np.ndarray:
+    """Render only the views consumed by the selected output layout."""
+    if layout in {'DEPTH', 'RGBD'}:
+        return pack_output(frame, depth, frame, frame, layout)
+    left, right = make_eye_pair(frame, depth, strength, convergence)
+    return pack_output(frame, depth, left, right, layout)
+
+
 def refine_depth(frame: np.ndarray, depth: np.ndarray, edge_refinement: bool) -> np.ndarray:
     """Optionally apply a grayscale-guided filter using ordinary OpenCV.
 

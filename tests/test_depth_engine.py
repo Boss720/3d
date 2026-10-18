@@ -236,6 +236,181 @@ class EngineTest(unittest.TestCase):
             snapshot['active_provider'] = 'made up'
             self.assertEqual(self.manager.execution_info()['active_provider'], 'DmlExecutionProvider')
 
+    def test_capability_schema_exists_even_when_runtime_cannot_load(self):
+        expected = {'schema_version': 1, 'named_models_directml': True,
+                    'gpu_max_input_dimension': 924, 'large_limited_gpu_max_input_dimension': 518,
+                    'limited_gpu_memory_mb': 4096, 'unknown_memory_policy': 'limited',
+                    'gpu_failure_cooldown_seconds': 60, 'gpu_retry_supported': True}
+        hardware = {'selected_adapter': None, 'adapters': [], 'error': None}
+        ort = SimpleNamespace(get_available_providers=lambda: ['CPUExecutionProvider'], __version__='fake')
+        with patch('depth_engine.probe_hardware', return_value=hardware):
+            with patch.object(self.manager, '_ort', return_value=ort):
+                self.assertEqual(ModelManager.runtime_info(self.manager)['capabilities'], expected)
+            with patch.object(self.manager, '_ort', side_effect=RuntimeError('not installed')):
+                self.assertEqual(ModelManager.runtime_info(self.manager)['capabilities'], expected)
+
+    def test_unknown_or_zero_memory_conservatively_caps_large(self):
+        self.accepted(LARGE)
+        for memory in [None, 0, -1, 'unknown', float('nan')]:
+            with self.subTest(memory=memory):
+                runtime = self.gpu_runtime()
+                runtime['gpu_device']['memory_mb'] = memory
+                session = FakeSession(provider='DmlExecutionProvider')
+                self.manager._session_key = None
+                with patch.object(self.manager, 'runtime_info', return_value=runtime), patch.object(self.manager, '_new_session', return_value=session):
+                    self.manager.predict(np.zeros((500, 1000, 3), np.uint8), LARGE, execution_mode='gpu')
+                info = self.manager.execution_info()
+                self.assertLessEqual(max(session.blob.shape[2:]), 518)
+                self.assertEqual(info['input_size_limit'], 518)
+                self.assertTrue(info['inference_succeeded'])
+                self.assertEqual(info['requested_input_size'], 518)
+                self.assertEqual((info['requested_input_height'], info['requested_input_width']), (518, 1036))
+                self.assertEqual((info['input_height'], info['input_width']), session.blob.shape[2:])
+        self.assertEqual(self.manager._gpu_input_limit(LARGE, {'memory_mb': 8192}), 924)
+        self.assertEqual(self.manager._gpu_input_limit(SMALL, {'memory_mb': None}), 924)
+
+    def test_gpu_suppression_expires_after_monotonic_cooldown_and_success_clears_it(self):
+        self.accepted(SMALL)
+        attempts = []
+        def create(path, **options):
+            provider = options.get('provider', 'CPUExecutionProvider')
+            attempts.append(provider)
+            if provider == 'DmlExecutionProvider' and attempts.count(provider) == 1:
+                raise RuntimeError('transient allocation failure')
+            return FakeSession(provider=provider)
+        with patch('time.monotonic', return_value=100) as clock, patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), patch.object(self.manager, '_new_session', side_effect=create):
+            frame = np.zeros((8, 8, 3), np.uint8)
+            self.manager.predict(frame, SMALL)
+            self.assertTrue(self.manager.execution_info()['inference_succeeded'])
+            self.assertIn('transient allocation failure', self.manager.execution_info()['fallback_reason'])
+            clock.return_value = 159.999
+            self.manager.predict(frame, SMALL)
+            self.assertEqual(attempts.count('DmlExecutionProvider'), 1)
+            clock.return_value = 160
+            self.manager.predict(frame, SMALL)
+            self.assertEqual(attempts.count('DmlExecutionProvider'), 2)
+            self.assertTrue(self.manager.execution_info()['gpu_verified'])
+            self.assertFalse(self.manager._gpu_failures)
+
+    def test_gpu_suppression_isolates_adapter_model_and_input_settings(self):
+        self.accepted(SMALL)
+        self.accepted(LARGE)
+        runtime = self.gpu_runtime()
+        attempts = []
+        def create(path, **options):
+            provider = options.get('provider', 'CPUExecutionProvider')
+            attempts.append(provider)
+            if provider == 'DmlExecutionProvider':
+                raise RuntimeError('device removed')
+            return FakeSession()
+        with patch('time.monotonic', return_value=100), patch.object(self.manager, 'runtime_info', return_value=runtime), patch.object(self.manager, '_new_session', side_effect=create):
+            frame = np.zeros((8, 8, 3), np.uint8)
+            self.manager.predict(frame, SMALL)
+            self.manager.predict(frame, SMALL)
+            self.assertEqual(attempts.count('DmlExecutionProvider'), 1)
+            self.manager.predict(frame, SMALL, input_size=256)
+            self.manager.predict(np.zeros((8, 16, 3), np.uint8), SMALL)
+            self.manager.predict(frame, LARGE)
+            runtime['gpu_device']['luid'] = 'new-physical-adapter'
+            self.manager.predict(frame, SMALL)
+            runtime['gpu_device']['memory_mb'] = 8192
+            self.manager.predict(frame, LARGE)
+            self.assertEqual(attempts.count('DmlExecutionProvider'), 6)
+
+    def test_explicit_gpu_retries_during_suppression_and_failure_reports_unsuccessful(self):
+        self.accepted(SMALL)
+        def create(path, **options):
+            if options.get('provider') == 'DmlExecutionProvider':
+                raise RuntimeError('device removed')
+            return FakeSession()
+        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), patch.object(self.manager, '_new_session', side_effect=create) as created:
+            frame = np.zeros((8, 8, 3), np.uint8)
+            self.manager.predict(frame, SMALL)
+            with self.assertRaisesRegex(RuntimeError, 'device removed'):
+                self.manager.predict(frame, SMALL, execution_mode='gpu')
+            self.assertEqual(created.call_count, 3)
+        info = self.manager.execution_info()
+        self.assertFalse(info['inference_succeeded'])
+        self.assertFalse(info['gpu_verified'])
+        self.assertEqual(info['input_size_limit'], 924)
+        self.assertIsNone(info['input_width'])
+
+    def test_failed_gpu_run_reports_attempted_dimensions_without_success(self):
+        self.accepted(LARGE)
+        session = FakeSession(provider='DmlExecutionProvider')
+        session.run = lambda *args: (_ for _ in ()).throw(RuntimeError('device removed'))
+        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), patch.object(self.manager, '_new_session', return_value=session):
+            with self.assertRaisesRegex(RuntimeError, 'device removed'):
+                self.manager.predict(np.zeros((500, 1000, 3), np.uint8), LARGE, execution_mode='gpu')
+        info = self.manager.execution_info()
+        self.assertFalse(info['inference_succeeded'])
+        self.assertFalse(info['gpu_verified'])
+        self.assertEqual(info['active_provider'], 'DmlExecutionProvider')
+        self.assertEqual(info['adapter']['id'], 1)
+        self.assertEqual(info['input_size_limit'], 518)
+        self.assertEqual((info['requested_input_height'], info['requested_input_width']), (518, 1036))
+        self.assertEqual((info['input_height'], info['input_width']), (252, 518))
+
+    def test_cpu_success_reports_requested_and_actual_dimensions_without_gpu_cap(self):
+        self.accepted(SMALL)
+        with patch.object(self.manager, '_new_session', return_value=FakeSession()):
+            self.manager.predict(np.zeros((8, 16, 3), np.uint8), SMALL, input_size=256, execution_mode='cpu')
+        info = self.manager.execution_info()
+        self.assertTrue(info['inference_succeeded'])
+        self.assertFalse(info['gpu_verified'])
+        self.assertEqual(info['active_provider'], 'CPUExecutionProvider')
+        self.assertEqual(info['requested_device'], 'cpu')
+        self.assertEqual((info['requested_input_height'], info['requested_input_width']), (126, 252))
+        self.assertEqual((info['input_height'], info['input_width']), (126, 252))
+        self.assertIsNone(info['input_size_limit'])
+
+    def test_reset_gpu_failures_waits_for_inference_and_preserves_session(self):
+        from concurrent.futures import ThreadPoolExecutor
+        self.accepted(SMALL)
+        entered, release, reset_attempted = threading.Event(), threading.Event(), threading.Event()
+        session = FakeSession(provider='DmlExecutionProvider')
+        original_run = session.run
+        def run(*args):
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError('test inference release timed out')
+            return original_run(*args)
+        session.run = run
+        def reset():
+            reset_attempted.set()
+            self.manager.reset_gpu_failures()
+        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), patch.object(self.manager, '_new_session', return_value=session), ThreadPoolExecutor(max_workers=2) as pool:
+            inference = pool.submit(self.manager.predict, np.zeros((8, 8, 3), np.uint8), SMALL)
+            try:
+                self.assertTrue(entered.wait(2))
+                reset_future = pool.submit(reset)
+                self.assertTrue(reset_attempted.wait(2))
+                self.assertFalse(reset_future.done())
+                self.assertIs(self.manager._session, session)
+            finally:
+                release.set()
+            inference.result(timeout=3)
+            reset_future.result(timeout=3)
+        self.assertIs(self.manager._session, session)
+        self.assertTrue(self.manager.execution_info()['inference_succeeded'])
+
+    def test_gpu_reset_allows_immediate_retry_and_suppression_storage_is_bounded(self):
+        self.accepted(SMALL)
+        def create(path, **options):
+            if options.get('provider') == 'DmlExecutionProvider':
+                raise RuntimeError('out of memory')
+            return FakeSession()
+        with patch('time.monotonic', return_value=100), patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), patch.object(self.manager, '_new_session', side_effect=create) as created:
+            frame = np.zeros((8, 8, 3), np.uint8)
+            self.manager.predict(frame, SMALL)
+            self.manager.reset_gpu_failures()
+            self.assertFalse(self.manager._gpu_failures)
+            self.manager.predict(frame, SMALL)
+            self.assertEqual(created.call_count, 4)
+            for detail in range(128, 220):
+                self.manager.predict(frame, SMALL, input_size=detail)
+            self.assertLessEqual(len(self.manager._gpu_failures), 64)
+
     def test_explicit_gpu_rejects_missing_backend(self):
         self.accepted(SMALL)
         unavailable = {'available': True, 'gpu_available': False, 'gpu_error': 'DirectML is unavailable'}

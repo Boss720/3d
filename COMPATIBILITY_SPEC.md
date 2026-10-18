@@ -1,5 +1,11 @@
 # StereoLab Compatibility Spec (v1)
 
+> Historical design record. Current source and README runtime contracts take
+> precedence over restrictions below. Large may attempt DirectML on 4 GB or unknown
+> memory with a 518 px cap; unknown memory is conservative. NVENC is used after a
+> local capability encode succeeds, with libx264 fallback. See ROADMAP.md and
+> PROGRESS.md for the current backlog and dated verification evidence.
+
 ## GPU addendum (2026-10-18; expands the v2 CPU-only boundary)
 
 Named models support CPU and Windows DirectML on the GTX 1650 Ti. Auto/hybrid fall
