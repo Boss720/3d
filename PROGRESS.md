@@ -186,3 +186,63 @@ Finding: `/api/models` reported Base and Large failed with WinError 10061. This 
 Acceptance: when an HTTPS loopback proxy refuses a connection, retry that pinned model request without the proxy, preserve normal configured proxies, keep existing hash/session acceptance checks, and show both causes if direct access also fails. Inspect source/docs and verify the actual install path where safe; avoid the 1.34 GB Large model and full suite for this focused repair.
 
 Outcome: added the loopback-refused direct retry and documented it. Through the actual downloader, Base transferred 388,917,010 bytes, passed its pinned SHA-256 (`dab40f67…26a7289`), loaded and completed CPU inference, and the restarted server reports Small and Base ready. `ast.parse` and `git diff --check` passed. The live server is running at `http://127.0.0.1:8766/`; Large and MiDaS remain available to install on demand. Full tests were not run for this focused fix.
+
+## Conversion speed and ETA wave (2026-10-18)
+
+User request: improve conversion speed, identify settings with the largest speed effect,
+show remaining time, and make other useful changes. The existing GTX 1650 Ti DirectML
+pipeline already overlaps CPU decode/render/encode with GPU depth inference for Auto
+and hybrid. Baseline: all 61 unit tests pass. The active server reports the GTX 1650 Ti
+and downloaded Small/Base/MiDaS models. Local FFmpeg advertises `h264_nvenc`, and a
+30-frame 320x180 smoke encode completed successfully on the NVIDIA device.
+
+Frozen acceptance: expose model input detail for dynamic neural models, clearly label
+the strongest speed controls and settings with little/no speed cost, provide a live
+video ETA only when a meaningful frame-rate estimate exists, and prefer NVENC only
+after the configured FFmpeg passes a local capability smoke test; otherwise retain
+libx264. Do not claim a speedup without measuring actual conversion/encoding. Keep
+audio, output layout and CPU-only operation working.
+
+| Lane | Owner | Exclusive files | Acceptance |
+|---|---|---|---|
+| ETA telemetry | ETA worker | main.py, tests/test_app.py | Monotonic elapsed/ETA/FPS fields; no fabricated estimate for stills, unknown frame counts or initial warmup; semantic endpoint/job tests |
+| Speed controls and queue display | UI worker | static/index.html, static/app.js, static/style.css | Dynamic model input detail; clear relative speed impact per setting; ETA/estimating/unavailable states; readable actual encoder status |
+| Encoder selection | encoder worker | video_encoder.py, tests/test_video_encoder.py | Probe NVENC with configured FFmpeg and a tiny local encode; use profile appropriate arguments only on success; safe libx264 fallback; mock failure cases |
+| Integration and verification | coordinator | PROGRESS.md, README.md, main.py after ETA lane, live/smoke evidence | Wire encoder and ETA contract, run full suites and real image/video/encoder checks, inspect browser state; preserve unrelated worktree content |
+
+Wave 1 handoff: the ETA lane added video-only frame metrics and a conservative estimate
+window; its focused app suite reports 11 passing tests. The UI lane added the detail
+selector, speed impact notes and queue metrics; its JS syntax and UI contract audit
+report passing. The encoder lane added a cached quality-specific NVENC smoke probe;
+its 7 unit tests pass, and local runs on the GTX 1650 Ti report NVENC working for all
+quality profiles. Worker reports are claims pending coordinator review and combined
+verification. All lanes released their assigned files.
+
+Wave 2 completed by the coordinator: independently reviewed the combined source and
+tests, integrated the quality-specific encoder profile and truthful encoder reporting
+into video jobs, made NVENC failure retry with libx264, and corrected the user-facing
+speed guidance to avoid claiming a universal fastest input size.
+
+Verification completed:
+
+- Full unit suite: 73 passing in `.venv` and 73 passing in `.venv-gpu`.
+- `py_compile` for the app, encoder helper and app tests; `node --check static/app.js`;
+  and `git diff --check` all passed.
+- Real hybrid export through the GPU environment: Depth Anything Small used the
+  verified `DmlExecutionProvider` on the GTX 1650 Ti, video stages overlapped, NVENC
+  produced the H.264 output, and the queue observed `estimating`, `available`, and
+  `complete` ETA states. The 48-frame 320x180 source became a 640x180 SBS MP4 with
+  all 48 frames and AAC audio; measured job elapsed time was 6.05 seconds.
+- Real encoder-only, three-run medians on generated clips: for 90 frames at 1080p,
+  old libx264 medium was 0.952 s, new veryfast was 0.470 s, and NVENC p4 was 0.690 s.
+  For 60 frames at 3840x1080, medians were 1.442 s, 0.683 s and 0.863 s. NVENC beat
+  the old preset in these tests but was slower than current veryfast x264; it is not
+  described as universally fastest. A PSNR check on the generated 1080p pattern was
+  47.83 dB for medium, 45.43 dB for veryfast and 48.56 dB for NVENC p4.
+- Warmed Small-model inference on a 240x400 source, 15 samples each: GPU medians
+  were 0.133/0.181/0.263 s at 256/384/518 input detail; CPU medians were
+  0.277/0.205/0.401 s. This workload demonstrates that input detail affects speed,
+  while the fastest size depends on the source shape and backend.
+- NVENC probe/profile and CPU retry paths have unit coverage; a GTX 1650 Ti smoke
+  encode succeeded for all three quality profiles. Final worktree review and
+  whitespace checks passed. Changes remain uncommitted.

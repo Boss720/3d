@@ -1,7 +1,7 @@
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const ids = ["mediaInput","dropZone","browseButton","sourceVideo","sourceImage","processedImage","previewEmpty","previewStage","sourceName","previewState","generatePreview","layoutSelect","formatHint","previewModeLabel","presetSelect","depthMode","depthNote","installSelected","modelRow","modelInput","modelButton","modelState","modelSizeRow","modelSize","strength","strengthValue","convergence","convergenceValue","temporalSmoothing","smoothingValue","edgeRefinement","invertDepth","resolution","quality","convertButton","convertCount","convertHint","queueRows","queueEmpty","queueCount","queueHeadingCount","clearQueueButton","enginePill","engineText","toolDescription","toolPath","runtimeDescription","runtimeCommand","modelCards","refreshModels","toast","helpButton","aboutDialog","aboutDone"];
+  const ids = ["mediaInput","dropZone","browseButton","sourceVideo","sourceImage","processedImage","previewEmpty","previewStage","sourceName","previewState","generatePreview","layoutSelect","formatHint","previewModeLabel","presetSelect","depthMode","depthNote","installSelected","modelRow","modelInput","modelButton","modelState","modelSizeRow","modelSizeLabel","modelSize","midasSizeNote","strength","strengthValue","convergence","convergenceValue","temporalSmoothing","smoothingValue","edgeRefinement","invertDepth","resolution","quality","convertButton","convertCount","convertHint","queueRows","queueEmpty","queueCount","queueHeadingCount","clearQueueButton","enginePill","engineText","toolDescription","toolPath","runtimeDescription","runtimeCommand","modelCards","refreshModels","toast","helpButton","aboutDialog","aboutDone"];
   ids.push("executionMode", "executionNote", "previewExecution");
   const ui = Object.fromEntries(ids.map((id) => [id, $(id)]));
   const imageExtensions = new Set(["jpg","jpeg","png","webp"]);
@@ -31,6 +31,42 @@
   function extension(file) { return (file.name.split(".").pop() || "").toLowerCase(); }
   function isImage(file) { return imageExtensions.has(extension(file)); }
   function formatBytes(bytes) { if (!bytes) return ""; const units=["B","KB","MB","GB"]; const n=Math.min(3,Math.floor(Math.log(bytes)/Math.log(1024))); return `${(bytes / 1024 ** n).toFixed(n ? 1 : 0)} ${units[n]}`; }
+  function formatDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return "";
+    let remaining = Math.ceil(seconds);
+    const hours = Math.floor(remaining / 3600); remaining %= 3600;
+    const minutes = Math.floor(remaining / 60); const secs = remaining % 60;
+    if (hours) return `${hours}h ${minutes}m`;
+    if (minutes) return secs ? `${minutes}m ${secs}s` : `${minutes}m`;
+    return `${secs}s`;
+  }
+  function metricNumber(value) {
+    if (value == null || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+  function etaLabel(item) {
+    if (item.state === "completed" || item.eta_status === "complete") return "Complete";
+    if (item.state === "queued") return "Waiting in queue";
+    if (item.state !== "processing") return "";
+    if (item.mediaType === "image") return "Still image · no time estimate";
+    const seconds = metricNumber(item.eta_seconds);
+    if (item.eta_status === "available" && seconds !== null && seconds >= 0) return `About ${formatDuration(seconds)} remaining`;
+    if (item.eta_status === "estimating") return "Estimating time left…";
+    if (item.eta_status === "unavailable") return "Time estimate unavailable";
+    return "Waiting for time estimate";
+  }
+  function progressDetails(item) {
+    const details = [];
+    const eta = etaLabel(item);
+    if (eta) details.push(eta);
+    const frames = metricNumber(item.frames_processed), total = metricNumber(item.total_frames), fps = metricNumber(item.processing_fps), elapsed = metricNumber(item.elapsed_seconds);
+    if (frames !== null && frames >= 0 && total !== null && total > 0) details.push(`Frames ${Math.min(frames, total).toLocaleString()} / ${total.toLocaleString()}`);
+    if (fps !== null && fps > 0) details.push(`${fps.toFixed(1)} fps`);
+    if (elapsed !== null && elapsed >= 0) details.push(`Elapsed ${formatDuration(elapsed)}`);
+    if (typeof item.encoder === "string" && item.encoder.trim()) details.push(`Encoder: ${item.encoder.trim()}`);
+    return details;
+  }
   function selectedModel() { return models.find((model) => model.id === ui.depthMode.value); }
   function limitedGpu() { return (runtime?.adapters || []).some((adapter) => (/nvidia|1650/i.test(adapter.name || "") || Number(adapter.vendor_id) === 4318) && Number(adapter.memory_mb) > 0 && Number(adapter.memory_mb) <= 4096); }
   function largeOnLimitedGpu() { return ui.depthMode.value === "depth-anything-v2-large" && limitedGpu(); }
@@ -143,6 +179,7 @@
       const meta=el("div","file-meta"); const state=el("span",`file-status ${item.state}`,item.message || ({ready:"Ready to convert",uploading:"Uploading locally",completed:"Complete",failed:"Failed",canceled:"Canceled"}[item.state] || item.state)); meta.append(state);
       const info=[formatBytes(item.file?.size||item.size),item.layout].filter(Boolean).join(" · "); if(info)meta.append(el("span","",info)); copy.append(name,meta);
       const execution=executionSummary(item.execution,item.pipeline);if(execution)copy.append(el("div","queue-execution",execution));else if(item.executionMode)copy.append(el("div","queue-execution",`Requested: ${{auto:"Auto",hybrid:"GPU + CPU",gpu:"NVIDIA GPU",cpu:"CPU only"}[item.executionMode] || item.executionMode} · awaiting execution`));
+      const runtimeDetails=progressDetails(item);if(runtimeDetails.length)copy.append(el("div","queue-runtime",runtimeDetails.join(" · ")));
       const actions=el("div","row-actions");
       if(activeStates.has(item.state)) {const progress=el("div","row-progress"),bar=el("span");progress.setAttribute("role","progressbar");progress.setAttribute("aria-label",`Conversion progress for ${item.name}`);progress.setAttribute("aria-valuemin","0");progress.setAttribute("aria-valuemax","100");progress.setAttribute("aria-valuenow",String(item.progress||0));bar.style.width=`${Math.max(2,Math.min(100,item.progress||0))}%`;progress.append(bar);actions.append(progress);}
       if(item.state==="completed"&&item.jobId){const link=el("a","row-button","Download ↓");link.href=`/api/jobs/${encodeURIComponent(item.jobId)}/download`;link.download=item.outputName||"";actions.append(link);}
@@ -153,12 +190,12 @@
     }
   }
   function saveHidden(){try{sessionStorage.setItem("stereolab.hiddenJobs",JSON.stringify([...hiddenJobs]));}catch{/* Keep this page usable without storage. */}}
-  function getSettings(){return {layout:ui.layoutSelect.value,strength:ui.strength.value,convergence:ui.convergence.value,depth_mode:ui.depthMode.value,execution_mode:ui.executionMode.value,input_size:ui.depthMode.value==="precision"?ui.modelSize.value:"518",resolution:ui.resolution.value,quality:ui.quality.value,temporal_smoothing:ui.temporalSmoothing.value,edge_refinement:String(ui.edgeRefinement.checked),invert_depth:String(ui.invertDepth.checked)};}
+  function getSettings(){const mode=ui.depthMode.value;const inputSize=mode==="dpt-hybrid-midas"?"384":mode==="precision"||/^depth-anything-v2-(small|base|large)$/.test(mode)?ui.modelSize.value:"518";return {layout:ui.layoutSelect.value,strength:ui.strength.value,convergence:ui.convergence.value,depth_mode:mode,execution_mode:ui.executionMode.value,input_size:inputSize,resolution:ui.resolution.value,quality:ui.quality.value,temporal_smoothing:ui.temporalSmoothing.value,edge_refinement:String(ui.edgeRefinement.checked),invert_depth:String(ui.invertDepth.checked)};}
   function updateSettings(stale=true) {
     renderDeviceNote();
     const layout=layouts[ui.layoutSelect.value];ui.formatHint.textContent=layout[1];ui.previewModeLabel.textContent=layout[0].toUpperCase();
     ui.strengthValue.value=Number(ui.strength.value).toFixed(1);ui.convergenceValue.value=Number(ui.convergence.value).toFixed(2);ui.smoothingValue.value=Number(ui.temporalSmoothing.value).toFixed(2);
-    const mode=ui.depthMode.value,model=selectedModel(); ui.modelRow.hidden=mode!=="precision";ui.modelSizeRow.hidden=mode!=="precision";
+    const mode=ui.depthMode.value,model=selectedModel();const selectableInputSize=mode==="precision"||/^depth-anything-v2-(small|base|large)$/.test(mode);ui.modelRow.hidden=mode!=="precision";ui.modelSizeRow.hidden=!selectableInputSize;ui.modelSizeLabel.textContent=mode==="precision"?"Custom model input size":"Neural input detail";ui.midasSizeNote.hidden=mode!=="dpt-hybrid-midas";
     ui.installSelected.hidden=!model || ["ready","downloading"].includes(model.state);ui.installSelected.disabled=false;
     ui.depthNote.replaceChildren();
     if(mode==="balanced")ui.depthNote.textContent="Uses luminance and center cues. This is a visual approximation, not neural AI depth.";
@@ -212,7 +249,7 @@
     catch(error){toast(error.message,true);}finally{ui.installSelected.disabled=false;}
   }
   async function uploadModel(file){if(!file)return;ui.modelButton.disabled=true;ui.modelState.textContent="Checking ONNX model…";const data=new FormData();data.append("model",file);try{const result=await request("/api/model",{method:"POST",body:data});customModelAvailable=Boolean(result.model_available);ui.modelState.textContent=result.model_name||file.name;markPreviewStale();toast("Custom ONNX model loaded locally.");}catch(error){ui.modelState.textContent=customModelAvailable?"Previous model retained":"No model loaded";toast(error.message,true);}finally{ui.modelButton.disabled=false;ui.modelInput.value="";updateSettings(false);}}
-  function mergeJob(item,job){Object.assign(item,{jobId:job.id,name:job.filename||item.name,mediaType:job.media_type||item.mediaType,state:job.state,progress:job.progress,message:job.message,error:job.error,outputName:job.output_name,layout:job.layout,execution:job.execution,executionMode:job.execution_mode,pipeline:job.pipeline});}
+  function mergeJob(item,job){const metrics=["eta_seconds","eta_status","elapsed_seconds","processing_fps","frames_processed","total_frames","encoder"];const reported=Object.fromEntries(metrics.filter((key)=>Object.hasOwn(job,key)).map((key)=>[key,job[key]]));Object.assign(item,{jobId:job.id,name:job.filename||item.name,mediaType:job.media_type||item.mediaType,state:job.state,progress:job.progress,message:job.message,error:job.error,outputName:job.output_name,layout:job.layout,execution:job.execution,executionMode:job.execution_mode,pipeline:job.pipeline},reported);}
   async function submitItem(item,settings){item.state="uploading";item.message="Adding to local queue";updateQueue();const data=new FormData();data.append("file",item.file,item.name);Object.entries(settings).forEach(([key,value])=>data.append(key,value));try{const job=await request("/api/jobs",{method:"POST",body:data});mergeJob(item,job);items=items.filter((x)=>x===item||x.jobId!==job.id);}catch(error){item.state="failed";item.error=error.message;item.message="Could not start conversion";}updateQueue();}
   async function convertPending(){if(submitting)return;const block=readiness();if(block){toast(block,true);return;}const pending=items.filter((x)=>!x.jobId&&x.state==="ready");if(!pending.length)return;const settings=getSettings();submitting=true;updateQueue();try{for(const item of pending){if(items.includes(item)&&item.state==="ready")await submitItem(item,settings);}}finally{submitting=false;updateQueue();await pollJobs();}}
   async function pollJobs(){

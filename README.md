@@ -60,6 +60,37 @@ depth predictions. Decoder/inference callbacks finish their current operation on
 cancellation; encoder termination releases pipe writes, and pipeline workers are
 joined before the job ends. Temporal smoothing remains ordered on the CPU.
 
+Video exports automatically use NVIDIA NVENC when the configured FFmpeg completes
+a small local encode check for the chosen quality profile. That result is cached for
+the current FFmpeg binary; unavailable or failed NVENC falls back to libx264, and a
+later NVENC export failure retries the video with the CPU encoder. The queue shows
+which encoder actually produced each export. `Fast` favors shorter encoding time;
+`High quality` takes longer and can produce larger output.
+
+The strongest speed controls are the depth model, neural input detail, source
+resolution, and video length. Start with Depth Anything V2 Small; lower input detail
+often reduces inference work, while 518 can preserve more fine depth detail. The
+fastest size depends on source shape and runtime: on this GTX 1650 Ti, 15 warmed
+Small-model runs on a 240x400 source measured GPU medians of 0.133/0.181/0.263 s at
+256/384/518 px, while CPU medians were 0.277/0.205/0.401 s. Treat these as one
+workload, not a universal ranking. `Up to 1080p` caps large sources; `Match source`
+keeps their full dimensions and takes more work. More video frames mean proportionally
+more processing. The encoder preset also matters, while 3D strength, convergence and
+depth inversion have negligible cost. Edge refinement and temporal smoothing add
+smaller CPU work per frame. Custom ONNX models may have a fixed input shape, in which
+case their model's required size takes precedence.
+
+Encoder-only medians on this GTX with a generated 90-frame 1080p clip were 0.952 s
+for the previous libx264 `medium` preset, 0.470 s for the new CPU `veryfast` preset,
+and 0.690 s for NVENC `p4`. NVENC offloads encoding and beats the old preset in this
+test, but the faster libx264 preset won; total depth conversion time also includes
+inference and stereo rendering.
+
+For videos, the queue begins estimating after it has observed at least five frames
+over two seconds, then reports remaining time, measured FPS and elapsed time from the
+actual job. The estimate adapts as the conversion runs; short clips, still images and
+videos without a reliable frame count do not get a fabricated remaining time.
+
 On this GTX 1650 Ti, a 100-frame Small-model test measured warmed median inference
 of .214 s on GPU versus .414 s on CPU, for one 400x240 synthetic source (518x308
 model input). Profiling contained DirectML and CPU kernel events. The highest

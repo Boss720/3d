@@ -25,6 +25,7 @@ from starlette.concurrency import run_in_threadpool
 
 from depth_engine import ModelManager
 from stereo import TemporalDepthFilter, layout_size, make_eye_pair, pack_output, refine_depth
+from video_encoder import select_encoder_profile
 from video_pipeline import PipelineCancelled, run_pipeline
 
 
@@ -46,6 +47,8 @@ NEURAL_MODES = {"depth-anything-v2-small", "depth-anything-v2-base", "depth-anyt
 DEPTH_MODES = {"balanced", "precision"} | NEURAL_MODES
 EXECUTION_MODES = {"auto", "cpu", "gpu", "hybrid"}
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
+ETA_MIN_FRAMES = 5
+ETA_MIN_SECONDS = 2.0
 
 for directory in (UPLOADS, MODELS, OUTPUTS):
     directory.mkdir(parents=True, exist_ok=True)
@@ -106,7 +109,13 @@ class Job:
     execution_mode: str = "auto"
     execution: dict[str, Any] = field(default_factory=dict)
     pipeline: str = "sequential"
+    encoder: str | None = None
     created_at: float = field(default_factory=time.time)
+    processing_started_monotonic: float | None = None
+    processing_finished_monotonic: float | None = None
+    video_started_monotonic: float | None = None
+    frames_processed: int = 0
+    total_frames: int | None = None
     state: str = "queued"
     progress: int = 0
     message: str = "Waiting in the local queue"
@@ -116,6 +125,47 @@ class Job:
     process: subprocess.Popen[bytes] | None = None
 
     def public(self) -> dict[str, Any]:
+        elapsed_seconds = None
+        processing_fps = None
+        eta_seconds = None
+        eta_status = "unavailable"
+        frames_processed = None
+        total_frames = None
+        if self.media_type == "video":
+            frames_processed = self.frames_processed
+            total_frames = self.total_frames
+            now = time.monotonic()
+            if self.processing_started_monotonic is not None:
+                processing_end = self.processing_finished_monotonic
+                if processing_end is None:
+                    processing_end = now
+                elapsed_seconds = max(0.0, processing_end - self.processing_started_monotonic)
+            video_elapsed = None
+            if self.video_started_monotonic is not None:
+                video_end = self.processing_finished_monotonic
+                if video_end is None:
+                    video_end = now
+                video_elapsed = max(0.0, video_end - self.video_started_monotonic)
+                if video_elapsed > 0 and self.frames_processed > 0:
+                    processing_fps = self.frames_processed / video_elapsed
+
+            if self.state == "completed":
+                eta_status = "complete"
+                if self.total_frames is not None and self.total_frames > 0:
+                    eta_seconds = 0.0
+            elif self.state == "processing" and self.total_frames is not None and self.total_frames > 0:
+                eta_status = "estimating"
+                if (
+                    self.frames_processed >= ETA_MIN_FRAMES
+                    and self.frames_processed < self.total_frames
+                    and video_elapsed is not None
+                    and video_elapsed >= ETA_MIN_SECONDS
+                    and processing_fps is not None
+                    and processing_fps > 0
+                ):
+                    eta_seconds = (self.total_frames - self.frames_processed) / processing_fps
+                    eta_status = "available"
+
         return {
             "id": self.id,
             "filename": self.filename,
@@ -136,6 +186,13 @@ class Job:
             "execution_mode": self.execution_mode,
             "execution": dict(self.execution),
             "pipeline": self.pipeline,
+            "encoder": self.encoder,
+            "eta_status": eta_status,
+            "elapsed_seconds": elapsed_seconds,
+            "processing_fps": processing_fps,
+            "eta_seconds": eta_seconds,
+            "frames_processed": frames_processed,
+            "total_frames": total_frames,
         }
 
 
@@ -285,7 +342,7 @@ def run_image(job: Job, net: cv2.dnn_Net | None) -> Path:
     return target
 
 
-def run_video(job: Job, net: cv2.dnn_Net | None) -> Path:
+def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) -> Path:
     ffmpeg = FFMPEG_PATH
     if not ffmpeg or not Path(ffmpeg).is_file():
         raise RuntimeError("FFmpeg was not found. Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.")
@@ -297,6 +354,7 @@ def run_video(job: Job, net: cv2.dnn_Net | None) -> Path:
     source_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
     total_frames = max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)))
+    set_job(job.id, total_frames=total_frames or None, frames_processed=0)
     if source_width < 1 or source_height < 1:
         capture.release()
         raise RuntimeError("The video does not report a valid frame size.")
@@ -311,11 +369,14 @@ def run_video(job: Job, net: cv2.dnn_Net | None) -> Path:
         height = max(4, height // 4 * 4)
     output_width, output_height = layout_size(width, height, job.layout)
     target = output_path_for(job)
-    quality = {
-        "fast": ("ultrafast", "24"),
-        "balanced": ("medium", "20"),
-        "high": ("slow", "17"),
-    }.get(job.quality, ("medium", "20"))
+    encoder_profile = select_encoder_profile(ffmpeg, job.quality)
+    encoder_args = encoder_profile.software_fallback_args if _force_software else encoder_profile.video_args
+    encoder_name = (
+        "CPU libx264 (NVENC fallback)" if _force_software and encoder_profile.codec == "h264_nvenc"
+        else "NVIDIA NVENC" if not _force_software and encoder_profile.codec == "h264_nvenc"
+        else "CPU libx264"
+    )
+    set_job(job.id, encoder=encoder_name, progress=1, message="Preparing video encoder")
 
     command = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
@@ -324,13 +385,13 @@ def run_video(job: Job, net: cv2.dnn_Net | None) -> Path:
         "-framerate", f"{fps:.8f}", "-i", "pipe:0",
         "-i", str(job.input_path),
         "-map", "0:v:0", "-map", "1:a?",
-        "-c:v", "libx264", "-preset", quality[0], "-crf", quality[1],
+        *encoder_args,
         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", str(target),
     ]
 
     proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    set_job(job.id, process=proc, message="Converting frames locally")
+    set_job(job.id, process=proc, encoder=encoder_name, message="Converting frames locally", video_started_monotonic=time.monotonic())
     stderr_lines: list[bytes] = []
 
     def drain_stderr() -> None:
@@ -382,7 +443,8 @@ def run_video(job: Job, net: cv2.dnn_Net | None) -> Path:
         frame_index += 1
         if frame_index == 1 or frame_index % max(1, round(fps)) == 0:
             progress = min(98, int(frame_index * 100 / total_frames)) if total_frames else min(98, frame_index // 10)
-            set_job(job.id, progress=progress, message=f"Frame {frame_index:,}" + (f" of {total_frames:,}" if total_frames else ""))
+            set_job(job.id, frames_processed=frame_index, progress=progress,
+                    message=f"Frame {frame_index:,}" + (f" of {total_frames:,}" if total_frames else ""))
 
     try:
         frames = source_frames()
@@ -409,9 +471,18 @@ def run_video(job: Job, net: cv2.dnn_Net | None) -> Path:
         if return_code != 0:
             detail = b"".join(stderr_lines).decode("utf-8", errors="replace").strip()
             detail = detail[-1200:] or f"FFmpeg exited with code {return_code}."
+            if encoder_profile.codec == "h264_nvenc" and not _force_software:
+                capture.release()
+                target.unlink(missing_ok=True)
+                set_job(job.id, process=None, encoder="CPU libx264 (NVENC fallback)",
+                        progress=1, frames_processed=0, video_started_monotonic=None,
+                        message="NVIDIA encoding failed; retrying this export with the CPU encoder")
+                return run_video(job, net, _force_software=True)
             raise RuntimeError(detail)
         if not target.is_file() or target.stat().st_size == 0:
             raise RuntimeError("FFmpeg finished without producing an output file.")
+        set_job(job.id, frames_processed=frame_index,
+                total_frames=frame_index if total_frames > 0 else None)
         return target
     except PipelineCancelled as exc:
         raise JobCancelled() from exc
@@ -421,6 +492,13 @@ def run_video(job: Job, net: cv2.dnn_Net | None) -> Path:
         if job.cancel_event.is_set():
             raise JobCancelled() from exc
         detail = b"".join(stderr_lines).decode("utf-8", errors="replace").strip()
+        if encoder_profile.codec == "h264_nvenc" and not _force_software:
+            capture.release()
+            target.unlink(missing_ok=True)
+            set_job(job.id, process=None, encoder="CPU libx264 (NVENC fallback)",
+                    progress=1, frames_processed=0, video_started_monotonic=None,
+                    message="NVIDIA encoding stopped; retrying this export with the CPU encoder")
+            return run_video(job, net, _force_software=True)
         raise RuntimeError((detail[-1200:] or str(exc)) + "\nCheck that this FFmpeg build includes libx264.") from exc
     finally:
         capture.release()
@@ -440,7 +518,8 @@ def process_job(job_id: str) -> None:
         return
 
     target = output_path_for(job)
-    set_job(job_id, state="processing", progress=1, message="Preparing local depth engine")
+    set_job(job_id, state="processing", progress=1, message="Preparing local depth engine",
+            processing_started_monotonic=time.monotonic(), processing_finished_monotonic=None)
     try:
         if job.depth_mode in NEURAL_MODES:
             DEPTH_ENGINE.validate(job.depth_mode, execution_mode=job.execution_mode)
@@ -449,13 +528,14 @@ def process_job(job_id: str) -> None:
         if job.cancel_event.is_set():
             target.unlink(missing_ok=True)
             raise JobCancelled()
-        set_job(job_id, state="completed", progress=100, output_path=target, process=None, message="Stereo export ready")
+        set_job(job_id, state="completed", progress=100, output_path=target, process=None,
+                processing_finished_monotonic=time.monotonic(), message="Stereo export ready")
     except JobCancelled:
         target.unlink(missing_ok=True)
-        set_job(job_id, state="canceled", process=None, message="Conversion canceled")
+        set_job(job_id, state="canceled", process=None, processing_finished_monotonic=time.monotonic(), message="Conversion canceled")
     except Exception as exc:  # Surface local decoder/encoder/model errors in the queue.
         target.unlink(missing_ok=True)
-        set_job(job_id, state="failed", process=None, error=str(exc), message="Conversion failed")
+        set_job(job_id, state="failed", process=None, processing_finished_monotonic=time.monotonic(), error=str(exc), message="Conversion failed")
     finally:
         job.input_path.unlink(missing_ok=True)
         with JOBS_LOCK:
