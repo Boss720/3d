@@ -25,7 +25,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import cv2
@@ -948,7 +948,8 @@ def _failed_run(
     }
 
 
-def _poll_job(client: httpx.Client, job_id: str, timeout_seconds: float, poll_seconds: float) -> dict[str, Any]:
+def _poll_job(client: httpx.Client, job_id: str, timeout_seconds: float, poll_seconds: float,
+              on_job_snapshot: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     started = time.perf_counter()
     while True:
         jobs = _request_json(client, "GET", "/api/jobs")
@@ -957,6 +958,8 @@ def _poll_job(client: httpx.Client, job_id: str, timeout_seconds: float, poll_se
         job = next((candidate for candidate in jobs if isinstance(candidate, dict) and candidate.get("id") == job_id), None)
         if job is None:
             raise BenchmarkError("job_disappeared", "Submitted job was not present in the local queue response.")
+        if on_job_snapshot is not None:
+            on_job_snapshot(job)
         if job.get("state") in {"completed", "failed", "canceled"}:
             return job
         if time.perf_counter() - started >= timeout_seconds:
@@ -980,6 +983,7 @@ def _execute_run(
     poll_seconds: float,
     work_directory: Path,
     sample_resources: bool = False,
+    on_job_snapshot: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     wall_started = time.perf_counter()
     def resource_record():
@@ -1023,7 +1027,7 @@ def _execute_run(
             raise BenchmarkError("submit_missing_id", "Job submission did not return a job id.")
 
         poll_started = time.perf_counter()
-        job = _poll_job(client, str(job_id), job_timeout, poll_seconds)
+        job = _poll_job(client, str(job_id), job_timeout, poll_seconds, on_job_snapshot)
         runner_timings["job_wait_seconds"] = time.perf_counter() - poll_started
         state = str(job.get("state", "unknown"))
         execution = job.get("execution") if isinstance(job.get("execution"), dict) else {}

@@ -1,6 +1,7 @@
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -16,6 +17,7 @@ from benchmarking import (
     verify_image_output,
     verify_video_observation,
     _model_record,
+    _poll_job,
 )
 
 
@@ -222,6 +224,22 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(benchmark_exit_code({"runs": [{"success": True}], "summaries": []}), 1)
         self.assertEqual(benchmark_exit_code({"runs": [{"success": True}],
                                                "summaries": [{"successful_runs": 3}]}), 0)
+
+    def test_job_snapshot_callback_observes_live_and_terminal_states(self):
+        snapshots = [
+            {"id": "owned", "state": "processing", "phase": "conversion",
+             "frames_processed": 5, "total_frames": 360},
+            {"id": "owned", "state": "completed", "phase": "complete",
+             "frames_processed": 360, "total_frames": 360},
+        ]
+        observed = []
+
+        with patch("benchmarking._request_json", side_effect=[
+                [{**snapshots[0]}], [{**snapshots[1]}]]), patch("benchmarking.time.sleep"):
+            result = _poll_job(object(), "owned", 5, 0.01, on_job_snapshot=observed.append)
+
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual([item["phase"] for item in observed], ["conversion", "complete"])
 
 
 if __name__ == "__main__":

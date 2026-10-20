@@ -1,6 +1,62 @@
-# StereoLab roadmap handoff — 18 October 2026
+# StereoLab roadmap handoff — 20 October 2026
 
-## Current checkpoint — history integrated; fresh GPU clip gate passed
+## Current checkpoint — commit and resume authorized
+
+The user requested committing the process-observation slice, then resuming with
+army. Three independent lanes reviewed process identity, stress semantics, and
+the private launch procedure. Review found and fixed a Toolhelp/PID-reuse race,
+a post-terminal observation window delayed until after download/inspection, and
+a stale cancellation status comparison. Semantic regression evidence is retained
+under `.runtime/commit-resume/{process-review,stress-review}/`.
+
+Independent final CPU and GPU-environment suites each passed 406 tests, with one
+existing real-Windows-symlink privilege skip (16.150s and 16.307s). Python
+compilation, Node syntax and whitespace checks passed. These suites precede the
+new live GPU gate; no live result is claimed at this checkpoint.
+
+Fresh NVIDIA inventory reports 0 MiB used, 0% utilization and no compute
+processes; documented historical service ports are no longer listening. A
+run-specific wrapper under `.runtime/commit-resume/private_gpu_gate.py` isolates
+writable app directories and disables history before startup. It retains the
+accepted model cache and runs unchanged production execution methods. Next:
+after the scoped commit, recheck idle state and run the generated all-model GPU
+process-observation gate on this newly owned private API, then archive jobs and
+stop it gracefully. Representative footage and multi-hour acceptance stay open.
+
+## Previous checkpoint — Phase 0.1 process observation instrumented (19 October)
+
+Repository `D:\Users\Hp\Documents\ChatGPT\3d`, branch `master`, HEAD
+`2bc6361`. The current process-cleanup instrumentation changes are uncommitted.
+The four requested dark UI mockups under `output/` were already untracked and
+remain untouched; no other output artifacts were staged or removed. No commit,
+push, or executable build was requested.
+
+The stress runner now requires an explicit loopback URL and expected server PID,
+then matches `/api/diagnostics/resources` and the read-only Windows process
+snapshot before it can submit jobs. It records verified FFmpeg PID/creation-time
+identities on job polls, checks those identities globally after terminal status
+to handle reparenting, and distinguishes first-sample absence, visibility then
+absence, persistence, PID reuse, and unavailable observations. A timeout or
+missing terminal snapshot is unverified and does not start a post-terminal
+window. Snapshot-time visibility does not establish exact exit timing.
+Cancellation now requires a processing/conversion job with at least five but
+fewer than all frames completed, and records phase and frame counts.
+
+Coordinator verification passed **399 tests** in each of `.venv` and `.venv-gpu`,
+with the same existing Windows real-symlink privilege skip. Python compilation
+passed. The helper lane also passed its 10 focused tests, including an owned
+Windows child/nested-child lifecycle. No stress API job or new GPU workload was
+run; current services remain untouched and per-process WDDM memory is still
+reported as `[N/A]`.
+
+Next gate: use an authorized representative clip and a genuinely idle window to
+run a newly owned private GPU API with explicit PID matching, then collect live
+process observations. Multi-hour reliability and exact process VRAM need their
+own evidence; this instrumentation alone does not close Phase 0.1.
+
+## Previous checkpoint — history integrated; fresh GPU clip gate passed (18 October)
+
+## Prior checkpoint details — history integration and GPU clip gate
 
 Repository D:\Users\Hp\Documents\ChatGPT\3d, branch master, HEAD `20709ff`
 (dark UI polish). The Phase 4.1 application integration is implemented and

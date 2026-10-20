@@ -905,3 +905,98 @@ Nextboundedwork: representative-media/reliability validation and deeper stereo
 A/B; intermittent model/codecvariance remains tracked. Reusabledepth4.2 needs its
 own frozen cacheformat/quota/invalidation spec; actualrecovery/projects remain
 separate. No workers or owned QA servers remain active.
+## Phase 0.1 process cleanup observation — instrumentation complete, live evidence deferred
+
+Resumed from committed `2bc6361` on `master`; only the four requested dark UI
+mockups under `output/` were untracked before this wave and remain untouched.
+Reconciled the next open roadmap gate: representative footage, multi-hour reliability,
+and exact process-level GPU/encoder cleanup evidence. Workspace stress videos are
+generated fixtures; no authorized real-footage sample is confirmed.
+
+Frozen contract: `plans/process-cleanup-verification.md`. Current read-only hardware
+probe reports GTX 1650 Ti, 4096 MiB device memory, 2910 MiB used, 0% utilization;
+`nvidia-smi --query-compute-apps=pid,used_memory` lists four existing API PIDs with
+memory `[N/A]`. Do not start another GPU workload or touch those services. Independent
+review corrected two claims: no child in a post-terminal sample does not establish
+exact exit timing, and the old cancellation snapshot omitted job phase. Require
+conversion phase and less than total frames, retain process creation identity to
+guard PID reuse, and require an explicit loopback URL plus expected API PID before
+the stress runner submits work. Live GPU acceptance waits until a safe idle window.
+
+Wave ownership:
+- Luna implementation lane: `process_tree.py`, `tests/test_process_tree.py`, and
+  `.runtime/process-cleanup-verification/` logs only.
+- Sol review lane: read-only review of the frozen contract and process evidence
+  interface; no source edits or server interaction.
+- Coordinator: `scripts/stress_roadmap.py`, `ROADMAP.md`, `HANDOFF.md`, this log,
+  and the final independent tests/diff review. No lane overlaps another.
+
+Implemented `process_tree.py` and integrated its read-only identity snapshots into
+the stress runner. A live run now needs an explicit loopback URL and expected PID;
+it validates the diagnostics PID and Windows process creation identity before any
+job submission. Exports retain FFmpeg PID/creation-time identities at polling
+snapshots and perform a global post-terminal check for reparented processes. The
+report distinguishes first-sample absence, visible-then-absent observations,
+continued visibility, PID reuse, and unverified snapshots. Snapshot timing does
+not establish exact exit timing. Timeouts or missing terminal snapshots are
+unverified and do not start a post-terminal window. Cancellation now records phase,
+frames, and total frames, and only triggers during conversion while work remains.
+
+Coordinator verification: focused process/stress/benchmark tests passed, both
+full suites passed with 399 tests and one existing Windows symlink-privilege skip,
+Python compilation passed, and `git diff --check` passed. Helper-lane raw logs are under
+`.runtime/process-cleanup-verification/`. No live stress job, new GPU workload,
+commit, or executable build was performed. Existing services and all four
+untracked `output/` mockups remain untouched.
+
+Remaining Phase 0.1 evidence: authorized representative footage, multi-hour
+reliability, live encoder identity observations on a newly owned private GPU
+server during a safe idle window, and exact process VRAM. Current WDDM reports
+`[N/A]` for server process memory; whole-device samples are not process peaks.
+
+## Commit and resume — 20 October 2026
+
+User authorized committing the current process-observation slice, then continuing
+roadmap work with army. Repository root and branch are confirmed (`master`,
+HEAD `2bc6361`); no applicable AGENTS.md was found in the root or ancestors.
+The existing four `output/` mockups stay outside the scoped commit.
+Fresh read-only NVIDIA inventory reports 4096 MiB total, 0 MiB used, 0% GPU
+utilization, and no compute processes. This differs from the previous busy state.
+
+Wave ownership before commit:
+- Luna process review: read-only `process_tree.py` and its tests; evidence logs
+  only under `.runtime/commit-resume/process-review/`.
+- Sol stress review: read-only changed benchmark/stress code and tests; evidence
+  logs only under `.runtime/commit-resume/stress-review/`.
+- Luna live protocol review: read-only server launch/configuration and existing
+  diagnostic scripts; evidence only under `.runtime/commit-resume/live-plan/`.
+- Coordinator owns source fixes, shared docs, independent complete diff review,
+  CPU/GPU-environment suites, syntax/whitespace checks, scoped commit, then one
+  sequential private-server GPU observation gate if the idle state persists.
+
+The next live gate uses generated fixtures and remains explicitly synthetic;
+representative real footage, multi-hour reliability and exact process VRAM remain
+separate acceptance items. Owned resources must be accounted for and stopped.
+
+Pre-commit review outcome: the coordinator inspected the complete scoped diff
+and untracked source/tests/plan. Fixed review findings with semantic red/green
+logs: reject a process identity created at/after the Toolhelp snapshot boundary;
+start the five-second global identity window in the terminal callback before
+output download/inspection; reject any observation finishing after that deadline;
+keep terminal-only children outside the during-export evidence; finalize the
+renamed cancellation trigger into passed/failed status. Windows cutoff regression
+simulates future creation timestamps on a real Toolhelp inventory, not actual PID
+reuse. No production inference/renderer behavior changed.
+
+Independent final CPU suite: 406 tests in 16.150s, OK(skipped=1).
+Independent final GPU-environment suite: 406 tests in 16.307s, OK(skipped=1).
+The existing skip is Windows real-symlink privilege. Python compileall, Node
+syntax, and git diff --check passed. Raw logs: .runtime/commit-resume/final-*.log.
+Focused lane logs retain the expected semantic failures and final passes.
+A pytest cache created by the review was moved intact into ignored quarantine
+with a scoped atomic move after native Move-Item hit permissions; no deletion.
+The four unrelated output mockups have a saved before-run SHA256 inventory.
+
+Next ownership after commit: coordinator runs and accounts for one private,
+isolated generated all-model GPU gate; independent read-only reviewer checks
+its report/output evidence. Only coordinator updates shared docs.

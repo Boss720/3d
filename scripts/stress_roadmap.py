@@ -24,6 +24,13 @@ if str(ROOT) not in sys.path:
 
 import benchmarking
 from resource_sampling import DeviceMemorySampler
+from process_tree import (
+    ProcessRootNotFound,
+    executable_basename,
+    find_descendants,
+    match_process_identity,
+    snapshot_windows_processes,
+)
 
 
 MODEL_IDS = (
@@ -53,12 +60,16 @@ def active_jobs(jobs: Any, excluded_ids: set[str] | None = None) -> list[dict[st
 
 
 def cancellation_ready(job: dict[str, Any], minimum_frames: int = 5) -> bool:
-    """Gate cancellation on a live job having actually processed enough frames."""
-    try:
-        frames = int(job.get("frames_processed", 0))
-    except (TypeError, ValueError):
+    """Gate cancellation on a live conversion before its final frame."""
+    if not isinstance(job, dict) or isinstance(minimum_frames, bool) or not isinstance(minimum_frames, int):
         return False
-    return str(job.get("state", "")).lower() in LIVE_STATES and frames >= minimum_frames
+    frames, total_frames = job.get("frames_processed"), job.get("total_frames")
+    if (isinstance(frames, bool) or not isinstance(frames, int)
+            or isinstance(total_frames, bool) or not isinstance(total_frames, int)):
+        return False
+    return (str(job.get("state", "")).lower() == "processing"
+            and str(job.get("phase", "")).lower() == "conversion"
+            and frames >= minimum_frames and total_frames > frames)
 
 
 def require_explicit_gpu_execution(execution: dict[str, Any]) -> None:
@@ -71,6 +82,214 @@ def require_explicit_gpu_execution(execution: dict[str, Any]) -> None:
     )
     if not valid:
         raise ValueError("Export did not verify explicit DmlExecutionProvider execution.")
+
+
+def require_expected_api_process(diagnostics: Any, expected_pid: int,
+                                 process_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fail closed unless the loopback API reports the expected live Windows process."""
+    if isinstance(expected_pid, bool) or not isinstance(expected_pid, int) or expected_pid < 1:
+        raise ValueError("An explicit positive expected API PID is required.")
+    if not isinstance(diagnostics, dict):
+        raise ValueError("API process diagnostics are unavailable or malformed.")
+    reported_pid = diagnostics.get("pid")
+    if isinstance(reported_pid, bool) or not isinstance(reported_pid, int) or reported_pid != expected_pid:
+        raise ValueError("The loopback API PID does not match --expected-server-pid.")
+    if not isinstance(process_entries, list):
+        raise ValueError("Windows process snapshot is unavailable or malformed.")
+    root = next((entry for entry in process_entries
+                 if isinstance(entry, dict) and entry.get("pid") == expected_pid), None)
+    if root is None:
+        raise ProcessRootNotFound(f"Expected API PID {expected_pid} is absent from the Windows process snapshot.")
+    executable = executable_basename(root.get("executable", ""))
+    if executable.casefold() not in {"python.exe", "pythonw.exe", "stereolab.exe"}:
+        raise ValueError(f"Expected API PID has an unrecognized server executable: {executable or 'unknown'}.")
+    if (root.get("identity_status") != "verified"
+            or isinstance(root.get("creation_time_100ns"), bool)
+            or not isinstance(root.get("creation_time_100ns"), int)
+            or root["creation_time_100ns"] < 1):
+        raise ValueError("Expected API process creation identity could not be verified.")
+    return dict(root)
+
+
+class FfmpegProcessObserver:
+    """Read-only, bounded observation of FFmpeg children for one verified API process."""
+
+    def __init__(self, api_process: dict[str, Any], sample_interval_seconds: float,
+                 snapshot_fn=snapshot_windows_processes):
+        self.api_process = dict(api_process)
+        self.snapshot_fn = snapshot_fn
+        self.sample_interval_seconds = float(sample_interval_seconds)
+        self.sample_count = 0
+        self.sample_error_count = 0
+        self.errors: list[str] = []
+        self._observed: dict[tuple[int, int | None, str], dict[str, Any]] = {}
+        self._last_job_snapshot: dict[str, Any] | None = None
+        self._terminal_observed_monotonic: float | None = None
+        self._terminal_observed_at_utc: str | None = None
+
+    def _record_error(self, error: Exception) -> None:
+        self.sample_error_count += 1
+        if len(self.errors) < 16:
+            self.errors.append(f"{type(error).__name__}: {str(error)[:200]}")
+
+    def observe_job_snapshot(self, job: dict[str, Any]) -> None:
+        if isinstance(job, dict):
+            self._last_job_snapshot = {
+                key: job.get(key) for key in ("state", "phase", "frames_processed", "total_frames")
+            }
+            if job.get("state") in TERMINAL_STATES:
+                if self._terminal_observed_monotonic is None:
+                    self._terminal_observed_monotonic = time.monotonic()
+                    self._terminal_observed_at_utc = datetime.now(timezone.utc).isoformat()
+                # The immediate after_terminal() check owns this sample. It must
+                # count as post-terminal visibility, not a sample during export.
+                return
+        self.sample()
+
+    def sample(self) -> None:
+        try:
+            entries = self.snapshot_fn()
+            self.sample_count += 1
+            api_pid = self.api_process["pid"]
+            root_status = match_process_identity(entries, self.api_process)["status"]
+            if root_status != "present":
+                raise ProcessRootNotFound(f"Verified API process identity changed: {root_status}.")
+            descendants = find_descendants(entries, api_pid)
+            for entry in descendants:
+                if executable_basename(entry.get("executable", "")).casefold() != "ffmpeg.exe":
+                    continue
+                creation = entry.get("creation_time_100ns")
+                identity_ok = (entry.get("identity_status") == "verified"
+                               and isinstance(creation, int) and not isinstance(creation, bool) and creation > 0)
+                relationship_ok = entry.get("tree_identity_status") == "verified"
+                key = (int(entry["pid"]), int(creation) if identity_ok else None,
+                       executable_basename(entry.get("executable", "")).casefold())
+                record = self._observed.setdefault(key, {
+                    "pid": key[0], "parent_pid": entry.get("parent_pid"),
+                    "executable": executable_basename(entry.get("executable", "")),
+                    "creation_time_100ns": key[1],
+                    "identity_status": "verified" if identity_ok else "unverified",
+                    "tree_relationship_status": "verified" if relationship_ok else "unverified",
+                    "samples_observed": 0,
+                })
+                record["samples_observed"] += 1
+        except Exception as exc:
+            self._record_error(exc)
+
+    def after_terminal(self, timeout_seconds: float = 5.0, interval_seconds: float = 0.1) -> dict[str, Any]:
+        started = (self._terminal_observed_monotonic
+                   if self._terminal_observed_monotonic is not None else time.monotonic())
+        terminal_states = {"completed", "failed", "canceled"}
+        job_reached_terminal = (self._last_job_snapshot is not None
+                                and self._last_job_snapshot.get("state") in terminal_states)
+        if not job_reached_terminal:
+            return {
+                "api_process": {key: self.api_process.get(key) for key in
+                                ("pid", "executable", "creation_time_100ns", "identity_status")},
+                "sample_interval_seconds": self.sample_interval_seconds,
+                "sample_count": self.sample_count,
+                "sample_error_count": self.sample_error_count,
+                "errors": list(self.errors),
+                "last_job_snapshot": self._last_job_snapshot,
+                "observed_ffmpeg_processes": list(self._observed.values()),
+                "post_terminal_check": {
+                    "deadline_seconds": timeout_seconds,
+                    "attempts": 0,
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "observations": [],
+                    "ever_visible_after_terminal": False,
+                    "identity_statuses": [],
+                },
+                "job_reached_terminal": False,
+                "terminal_observed_at_utc": None,
+                "status": "unverified_job_not_terminal",
+                "scope": "No post-terminal process observation was made because the job had no observed terminal snapshot.",
+            }
+        deadline = started + timeout_seconds
+        statuses: dict[tuple[int, int | None, str], str] = {}
+        observations: list[dict[str, Any]] = []
+        ever_visible: set[tuple[int, int | None, str]] = set()
+        uncertain_identity_seen = False
+        attempts = 0
+        window_missed = timeout_seconds > 0 and time.monotonic() > deadline
+        while not window_missed:
+            attempts += 1
+            try:
+                entries = self.snapshot_fn()
+                for key, observed in self._observed.items():
+                    statuses[key] = match_process_identity(entries, observed)["status"]
+            except Exception as exc:
+                self._record_error(exc)
+                statuses = {key: "unverified" for key in self._observed}
+                uncertain_identity_seen = True
+                break
+            sample_completed = time.monotonic()
+            if timeout_seconds > 0 and sample_completed > deadline:
+                window_missed = True
+            ever_visible.update(key for key, status in statuses.items() if status == "present")
+            uncertain_identity_seen = uncertain_identity_seen or any(
+                status in {"unverified", "reused"} for status in statuses.values())
+            observations.append({
+                "elapsed_seconds": round(sample_completed - started, 3),
+                "within_deadline": timeout_seconds == 0 or sample_completed <= deadline,
+                "identity_statuses": [
+                    {"pid": key[0], "creation_time_100ns": key[1], "status": value}
+                    for key, value in statuses.items()
+                ],
+            })
+            if uncertain_identity_seen or not any(status == "present" for status in statuses.values()):
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(min(interval_seconds, max(0.0, deadline - time.monotonic())))
+
+        status_values = list(statuses.values())
+        if self.sample_error_count:
+            status = "unverified_snapshot_or_root_error"
+        elif window_missed:
+            status = "unverified_post_terminal_window_missed"
+        elif not self.sample_count or not self._observed:
+            status = "unverified_ffmpeg_not_observed_during_export"
+        elif any(item.get("identity_status") != "verified" for item in self._observed.values()):
+            status = "unverified_ffmpeg_identity"
+        elif any(item.get("tree_relationship_status") != "verified" for item in self._observed.values()):
+            status = "unverified_ffmpeg_tree_relationship"
+        elif uncertain_identity_seen or any(value in {"unverified", "reused"} for value in status_values):
+            status = "unverified_post_terminal_identity"
+        elif any(value == "present" for value in status_values):
+            status = f"still_visible_after_{timeout_seconds:g}_seconds"
+        elif ever_visible:
+            status = "observed_then_absent_during_window"
+        else:
+            status = "not_visible_at_first_post_terminal_sample"
+
+        return {
+            "api_process": {key: self.api_process.get(key) for key in
+                            ("pid", "executable", "creation_time_100ns", "identity_status")},
+            "sample_interval_seconds": self.sample_interval_seconds,
+            "sample_count": self.sample_count,
+            "sample_error_count": self.sample_error_count,
+            "errors": list(self.errors),
+            "last_job_snapshot": self._last_job_snapshot,
+            "observed_ffmpeg_processes": list(self._observed.values()),
+            "post_terminal_check": {
+                "deadline_seconds": timeout_seconds,
+                "attempts": attempts,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "observations": observations,
+                "ever_visible_after_terminal": bool(ever_visible),
+                "identity_statuses": [
+                    {"pid": key[0], "creation_time_100ns": key[1], "status": value}
+                    for key, value in statuses.items()
+                ],
+            },
+            "job_reached_terminal": True,
+            "terminal_observed_at_utc": self._terminal_observed_at_utc,
+            "status": status,
+            "scope": ("The post-terminal observation window was missed; no timely cleanup conclusion can be drawn."
+                      if window_missed else
+                      "Observed process identities were checked globally after terminal status. Visibility is reported at snapshot times; sampling does not establish exact exit timing."),
+        }
 
 
 def stop_reason_after_model(record: dict[str, Any], activity: dict[str, Any]) -> str | None:
@@ -249,7 +468,8 @@ def _cancel_test(client: httpx.Client, source: benchmarking.PreparedFixture, mod
         if job is None:
             result["status"] = "job_disappeared"
             return result
-        result["last_job_snapshot"] = {key: job.get(key) for key in ("state", "progress", "frames_processed", "total_frames")}
+        result["last_job_snapshot"] = {key: job.get(key) for key in
+                                        ("state", "phase", "progress", "frames_processed", "total_frames")}
         concurrent = active_jobs([job for job in benchmarking._request_json(client, "GET", "/api/jobs")
                                   if isinstance(job, dict)], {str(job_id)})
         if concurrent:
@@ -263,7 +483,9 @@ def _cancel_test(client: httpx.Client, source: benchmarking.PreparedFixture, mod
         if cancellation_ready(job):
             trigger_job = job
             result["trigger_frames_processed"] = int(job.get("frames_processed", 0))
-            result["status"] = "cancel_requested_after_frame_threshold"
+            result["trigger_phase"] = job.get("phase")
+            result["trigger_total_frames"] = int(job.get("total_frames", 0))
+            result["status"] = "cancel_requested_during_conversion_after_frame_threshold"
             try:
                 canceled = client.post(f"/api/jobs/{job_id}/cancel")
                 result["cancel_http_status"] = canceled.status_code
@@ -313,7 +535,7 @@ def _cancel_test(client: httpx.Client, source: benchmarking.PreparedFixture, mod
                          and result.get("final_state") == "canceled"
                          and result.get("download_http_status") == 404)
     result["api_canceled"] = result.get("final_state") == "canceled"
-    if result.get("status") == "cancel_requested_after_frame_threshold":
+    if result.get("status") == "cancel_requested_during_conversion_after_frame_threshold":
         result["status"] = "passed" if result["success"] else "failed_after_cancel_request"
     return result
 
@@ -325,7 +547,8 @@ def _settings(model_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
 
 def _model_result(client: httpx.Client, model_id: str, catalog: Any, status: dict[str, Any],
                   source: benchmarking.PreparedFixture, manifest: dict[str, Any], run_root: Path,
-                  timeout_seconds: float, poll_seconds: float, sample_resources: bool) -> dict[str, Any]:
+                  timeout_seconds: float, poll_seconds: float, sample_resources: bool,
+                  api_process: dict[str, Any]) -> dict[str, Any]:
     model = benchmarking._model_record(catalog, model_id)
     settings = _settings(model_id, manifest)
     activity = _activity(client)
@@ -356,10 +579,22 @@ def _model_result(client: httpx.Client, model_id: str, catalog: Any, status: dic
     environment = benchmarking._environment(status, ffmpeg_path, sample_resources)
     record["runtime"]["runtime_fingerprint"] = environment["runtime_fingerprint"]
     with DeviceMemorySampler() if sample_resources else nullcontext(None) as sampler:
+        process_observer = FfmpegProcessObserver(api_process, poll_seconds)
+        cleanup_observation = None
+
+        def observe_job_snapshot(job: dict[str, Any]) -> None:
+            nonlocal cleanup_observation
+            process_observer.observe_job_snapshot(job)
+            if job.get("state") in TERMINAL_STATES and cleanup_observation is None:
+                cleanup_observation = process_observer.after_terminal()
+
         export = benchmarking._execute_run(
             client, source, settings, model, environment, ffmpeg_path, 1,
             timeout_seconds, poll_seconds, work_directory, sample_resources=True,
+            on_job_snapshot=observe_job_snapshot,
         )
+        export["process_cleanup_observation"] = (
+            cleanup_observation if cleanup_observation is not None else process_observer.after_terminal())
         export["runtime_build_fingerprint"] = status.get("build_fingerprint")
         export["model_hash"] = model.get("hash")
         export["settings"] = settings
@@ -415,9 +650,21 @@ def _positive_timeout(value: str) -> float:
     return number
 
 
+def _positive_server_pid(value: str) -> int:
+    try:
+        pid = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a positive process ID") from None
+    if pid < 1:
+        raise argparse.ArgumentTypeError("must be a positive process ID")
+    return pid
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run sequential 30-second all-model StereoLab stress exports.")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8770", help="Local GPU API; loopback only")
+    parser.add_argument("--base-url", required=True, help="Explicit owned local GPU API; loopback only")
+    parser.add_argument("--expected-server-pid", type=_positive_server_pid, required=True,
+                        help="Require API diagnostics and Windows process snapshot to match this owned PID")
     parser.add_argument("--timeout-seconds", type=_positive_timeout, default=1200.0,
                         help="Maximum wait per export or cancellation job (1-1200; default 1200)")
     parser.add_argument("--poll-seconds", type=float, default=0.5, help="Local API job poll interval")
@@ -430,6 +677,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_stress(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
     base_url = benchmarking.validate_local_api_url(args.base_url)
+    expected_pid = getattr(args, "expected_server_pid", None)
+    if isinstance(expected_pid, bool) or not isinstance(expected_pid, int) or expected_pid < 1:
+        raise benchmarking.BenchmarkError("expected_server_pid_required",
+                                          "Specify the positive PID of the private API process owned for this run.")
     manifest = _manifest()
     model_ids = args.model or list(MODEL_IDS)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
@@ -449,6 +700,8 @@ def run_stress(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "Model jobs run sequentially and are submitted only after the API reports no active jobs.",
             "Server CPU time and working-set data come from /api/diagnostics/resources; device-wide memory is opt-in and includes other processes.",
             "API cancellation plus a 404 download check does not verify OS encoder-process cleanup.",
+            "Windows process snapshots are taken on each job poll. A post-terminal process identity check reports visibility for up to five seconds; it does not establish exact exit timing.",
+            "Terminal process observation runs before output download and adds up to five seconds to runner job-wait and total-wall timings; API job timings remain service measurements.",
         ],
         "preflight": {}, "models": [], "completed_at_utc": None,
     }
@@ -460,19 +713,38 @@ def run_stress(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             raise benchmarking.BenchmarkError("invalid_preflight", "Local API status or model catalog was invalid.")
         initial_activity = _activity(client)
         diagnostics = _server_resource(client)
+        try:
+            api_process = require_expected_api_process(
+                diagnostics, expected_pid, snapshot_windows_processes())
+        except (OSError, ValueError, RuntimeError, ProcessRootNotFound) as exc:
+            report["preflight"] = {
+                "activity": initial_activity,
+                "server_process_resources": diagnostics,
+                "owned_server_validation": {"status": "failed", "expected_pid": expected_pid,
+                                            "error": f"{type(exc).__name__}: {str(exc)[:240]}"},
+            }
+            report["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
+            report["success"] = False
+            _write_json(report_path, report)
+            raise benchmarking.BenchmarkError("owned_server_validation_failed", str(exc)) from None
         runtime = status.get("runtime") if isinstance(status.get("runtime"), dict) else {}
         ffmpeg_path = status.get("ffmpeg_path") if isinstance(status.get("ffmpeg_path"), str) else None
         model_records = [benchmarking._model_record(catalog, model_id) for model_id in model_ids]
         report["preflight"] = {
             "build_fingerprint": status.get("build_fingerprint"), "runtime": runtime,
             "server_process_resources": diagnostics, "activity": initial_activity,
+            "owned_server_validation": {
+                "status": "passed", "expected_pid": expected_pid,
+                "api_process": {key: api_process.get(key) for key in
+                                ("pid", "executable", "creation_time_100ns", "identity_status")},
+            },
             "ffmpeg_path": ffmpeg_path,
             "models": model_records,
             "no_downloads_performed": True,
         }
         _write_json(report_path, report)
         if not ffmpeg_path or not runtime.get("gpu_available") or "DmlExecutionProvider" not in (runtime.get("providers") or []):
-            raise benchmarking.BenchmarkError("gpu_preflight_failed", "8770 does not currently report usable DirectML and FFmpeg.")
+            raise benchmarking.BenchmarkError("gpu_preflight_failed", "The explicitly owned API does not currently report usable DirectML and FFmpeg.")
         try:
             source = _generate_source(manifest, run_root / "source", ffmpeg_path)
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
@@ -498,7 +770,8 @@ def run_stress(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
                           "stop_reason": stop_reason}
             else:
                 record = _model_result(client, model_id, catalog, status, source, manifest, run_root,
-                                       args.timeout_seconds, args.poll_seconds, args.sample_resources)
+                                       args.timeout_seconds, args.poll_seconds, args.sample_resources,
+                                       api_process)
                 activity_after = _activity(client)
                 stop_reason = stop_reason_after_model(record, activity_after)
                 if stop_reason == "server_has_active_jobs_after_model":

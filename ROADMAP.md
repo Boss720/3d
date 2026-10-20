@@ -1,17 +1,17 @@
 # StereoLab development roadmap
 
 Prepared 18 October 2026 against commit `0c08d1a`; reconciled through the
-Phase 4.1 integration and GPU consistency follow-up on top of `20709ff`
-(currently uncommitted).
+Phase 4.1 integration, GPU consistency follow-up, and 20 October review of
+Phase 0.1 process-observation instrumentation on baseline `2bc6361`.
 
-## Execution status — 18 October 2026
+## Execution status — 20 October 2026
 
 This is a reconciled backlog. Completed slices do not imply their entire phase is
 finished. See PROGRESS.md and HANDOFF.md for dated commands, reports and limitations.
 
 | Item | Current outcome | Remaining acceptance |
 |---|---|---|
-| 0.1 | Benchmark runner, repeated CPU/GPU/hybrid Small checks; all four models completed generated 30s/360-frame GPU exports and separate cancellations, with sampled resources | Representative real footage, multi-hour reliability and exact process VRAM/encoder cleanup evidence |
+| 0.1 | Benchmark runner and repeated CPU/GPU/hybrid checks; all four models completed generated 30s/360-frame GPU exports and separate cancellations. Read-only Windows process identity observation, explicit owned-server PID preflight, and conversion-phase cancellation snapshots are implemented and CPU-tested | Representative real footage, multi-hour reliability, live encoder-process observations, and exact process VRAM remain open |
 | 0.2 | Capability schema v1, conservative unknown memory, bounded cooldown, visible GPU retry, actual execution metadata | Broader adapter/device validation beyond local GTX and mocked policies |
 | 0.3 | Preflight decode/first frame, dimensions, codec inventory, writable output/disk budget; historical docs labeled | Full-stream corruption and export-time failures remain possible |
 | 1.1 | Bounded raw preview-depth LRU; presentation edits reuse depth; precise invalidation/reset | Continue real-media interaction validation |
