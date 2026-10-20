@@ -995,8 +995,94 @@ syntax, and git diff --check passed. Raw logs: .runtime/commit-resume/final-*.lo
 Focused lane logs retain the expected semantic failures and final passes.
 A pytest cache created by the review was moved intact into ignored quarantine
 with a scoped atomic move after native Move-Item hit permissions; no deletion.
-The four unrelated output mockups have a saved before-run SHA256 inventory.
+The four unrelated output mockups remain excluded from staging. The initial
+before-run hash command inspected only top-level files; the actual assets are
+nested, so it produced no hash inventory. No before/after hash equality is claimed.
 
 Next ownership after commit: coordinator runs and accounts for one private,
 isolated generated all-model GPU gate; independent read-only reviewer checks
 its report/output evidence. Only coordinator updates shared docs.
+
+Committed the ten scoped source/test/plan/documentation files as `d78b70c`
+(Add verified Windows encoder process observations). Post-commit status contains
+only the four pre-existing output mockups. Beginning the authorized continuation:
+one private API under `.runtime/commit-resume/live-20261020/`, with writable
+uploads/outputs/calibration/proxies isolated before startup and history disabled.
+Stress artifacts have their own accounted-for `.runtime/stress-verification/`
+run root. Model reads use the existing accepted cache; no OS read-only ACL is
+claimed. Before/after full SHA256 inventories check persistent cache changes.
+Coordinator owns execution and shared docs; the review lanes are finished.
+
+## Resumed live Phase 0.1 gate — 20 October 2026
+
+Private all-model gate completed after commit `d78b70c`. Wrapper:
+`.runtime/commit-resume/private_gpu_gate.py`; private data and accounting:
+`.runtime/commit-resume/live-20261020/`. New owned API PID972/port52711 used
+backend fingerprint39c6c6d6528bf2ead09647048f1cc91fc46e1c25534d7f9004716fe881b5d237,
+private uploads/outputs/proxies/calibration, disabled history and existing accepted
+models without downloads. Historical ports were not reused. Stress artifacts:
+`.runtime/stress-verification/20261020T121020Z-3509b490/report.json`.
+
+| Model | Export wall seconds | Observed FFmpeg identities | Job-poll process snapshots | Cancel trigger frame/360 | Whole-device sampled high MiB |
+|---|---:|---:|---:|---:|---:|
+| Depth Anything V2 Small | 85.638 | 2 | 158 | 7 | 357 |
+| Depth Anything V2 Base | 137.061 | 1 | 257 | 5 | 730 |
+| DPT Hybrid/MiDaS | 54.197 | 1 | 99 | 7 | 975 |
+| Depth Anything V2 Large | 261.646 | 1 | 490 | 5 | 1818 |
+
+All four exports completed, requested GPU and verified DmlExecutionProvider with
+successful inference and no fallback. Small/Base/Large actual input518x294; DPT
+384x384. Independent full OpenCV decode found360 frames,640x180,12fps in every
+output; adjacent ffprobe confirmed audio and30s duration. Source/export SHA256,
+public terminal execution links, and all four cancellation thresholds/statuses
+passed. Eight terminal public records were saved before shutdown: four completed,
+four canceled; cancellation download checks returned404. Cancellation phase was
+conversion with work remaining; it does not identify a narrower inference substage.
+
+All completed exports observed verified FFmpeg identities and lineage with zero
+snapshot errors. First post-terminal checks completed at rounded0.016/0.016/0.000/
+0.015seconds after receipt of terminal API status; all observed identities were
+absent. No precise exit timing is inferred. The app gracefully stopped with exit0;
+independent matching of the final global process inventory found the API and all
+five observed FFmpeg identities absent. Whole-device memory returned0MiB/0%.
+Live per-process NVIDIA readings for API and FFmpeg remained[N/A]; sampled highs
+are whole-device values, not process peaks. Model before/after SHA256 inventories
+matched and independent rehash of on-disk models passed.
+
+Independent audit script from the Luna lane was reviewed and executed by the
+coordinator. Schema review corrected normalized-vs-public execution fields and
+native ToolhelpPID0 handling before acceptance. The first actual run then exposed
+a separate audit-script output_path collision: it wrote its JSON result over the
+last downloaded Large verification MP4. This did not alter the original API
+output. Coordinator preserved the overwritten JSON, verified original API file
+SHA25663920fe63bc972ef963c5d6ed9ac628d0221b82a120679f680cae1e01cd7c60f and size
+1406817bytes against the pre-audit export record, and restored that check copy.
+The audit result path is now separate and confined to JSON in its own directory.
+Corrected audit reran exit0 with all10checks passing; coordinator independently
+rehashed all four copies AFTER the audit and confirmed expected sizes/hashes.
+
+Evidence: `.runtime/commit-resume/independent-audit/` includes original
+`final-audit.log`, `overwritten-verification-copy-audit.json`, `copy-recovery.json`,
+`final-audit-corrected.log`, `audit-result.json`, and
+`post-audit-output-hashes.json`. The failed summary read that revealed the collision
+was an evidence-helper error, not a conversion failure. No repeat inference was
+needed; original app outputs and job records remain retained.
+
+This closes the generated completed-export process observation slice only.
+Representative real footage, multi-hour reliability, canceled-job FFmpeg identity
+observations, exact process VRAM, intermittent model/codec variation and physical
+playback remain unverified. Original failed GPU consistency evidence is preserved.
+Next bounded work: extend the same conservative process observation contract to
+canceled jobs; no new implementation or workload starts in this wave.
+
+Final independent Sol review accepted the slice after38 raw-JSON checks and
+separate SHA256/size comparisons of all four verification copies AND original
+API outputs. Logs: `.runtime/commit-resume/final-review/raw-json-crosscheck.txt`
+and `final-acceptance.txt`. No additional live action or source edit by reviewer.
+The corrected audit log matches its saved JSON. Final root GPU inventory is0MiB/
+0%; port52711 has no listener. A current recursive inventory of the four nested
+UI PNGs plus their existing prompts is retained in
+`.runtime/commit-resume/mockups-final.json`; no pre-run hash inventory exists.
+Their modification timestamps remain18October, and no task lane edited/staged
+those files. Final tracked changes are only HANDOFF.md, ROADMAP.md and PROGRESS.md
+with this resumed evidence; source/tests remain at the committed checkpoint.

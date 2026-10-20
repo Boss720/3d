@@ -1,6 +1,43 @@
 # StereoLab roadmap handoff — 20 October 2026
 
-## Current checkpoint — commit and resume authorized
+## Current checkpoint — committed instrumentation; live GPU observation gate passed
+
+Committed the scoped process-observation work as `d78b70c` on `master`, then
+completed the generated all-model live gate on a new private GPU API
+(PID972/port52711). This owned instance was gracefully stopped with exit0 after
+archiving eight terminal jobs: four completed exports and four cancellations.
+Fresh final process inventory finds the API and all five observed FFmpeg
+identities absent. GPU returned to 0 MiB/0%; no historical service was restarted.
+
+Each export decoded independently to 360 frames at 640x180/12fps with audio and
+30-second duration. DirectML execution matched archived public job records with
+successful inference and no fallback. Each completed export had verified FFmpeg
+identity observations, zero sampling errors, and absence at the first terminal
+sample (rounded 0.000–0.016s after terminal receipt). This establishes sampled
+absence, not exact process exit times. Cancellation triggers were conversion
+frames 7/5/7/5 of360; all four ended canceled with HTTP404 download checks.
+Canceled-job process cleanup was not separately instrumented and remains open.
+
+Evidence: `.runtime/stress-verification/20261020T121020Z-3509b490/report.json`;
+`.runtime/commit-resume/live-20261020/run.json` and `jobs-final.json`;
+`.runtime/commit-resume/independent-audit/audit-result.json`.
+Before/after full model SHA256 inventories matched; an independent disk rehash
+also passed. Live WDDM process memory still reported `[N/A]`.
+
+The first independent audit had an output-variable collision that overwrote
+only the downloaded Large verification copy with its JSON result. Preserved that
+JSON, restored the copy from the untouched API output after SHA256/size checks,
+fixed/confined the audit output path, and reran successfully. Root rehashed all
+four verification copies after the corrected audit; all matched original export
+metadata. Recovery and corrected raw logs remain beside the audit result.
+
+The live gate's evidence updates are recorded in this handoff, ROADMAP and
+PROGRESS. The four unrelated UI mockups remain outside the commit.
+Next bounded gate: canceled-job FFmpeg observations using the same identity and
+terminal-window contract. Representative footage, multi-hour reliability, exact
+process VRAM, intermittent GPU variance and physical-display review remain open.
+
+## Previous checkpoint — commit and resume authorized
 
 The user requested committing the process-observation slice, then resuming with
 army. Three independent lanes reviewed process identity, stress semantics, and

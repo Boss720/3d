@@ -2,7 +2,8 @@
 
 Prepared 18 October 2026 against commit `0c08d1a`; reconciled through the
 Phase 4.1 integration, GPU consistency follow-up, and 20 October review of
-Phase 0.1 process-observation instrumentation on baseline `2bc6361`.
+Phase 0.1 process-observation instrumentation committed as `d78b70c` and its
+subsequent live generated GPU gate.
 
 ## Execution status — 20 October 2026
 
@@ -11,7 +12,7 @@ finished. See PROGRESS.md and HANDOFF.md for dated commands, reports and limitat
 
 | Item | Current outcome | Remaining acceptance |
 |---|---|---|
-| 0.1 | Benchmark runner and repeated CPU/GPU/hybrid checks; all four models completed generated 30s/360-frame GPU exports and separate cancellations. Read-only Windows process identity observation, explicit owned-server PID preflight, and conversion-phase cancellation snapshots are implemented and CPU-tested | Representative real footage, multi-hour reliability, live encoder-process observations, and exact process VRAM remain open |
+| 0.1 | All four models passed a fresh generated 30s/360-frame GPU export and conversion cancellation on a private API. Completed exports observed five verified FFmpeg identities with zero sampling errors; all were absent at the first terminal sample and after owned-server shutdown. Independent full decode/audio/hash/public-job checks passed | Representative real footage, multi-hour reliability, canceled-job FFmpeg observations, and exact process VRAM remain open; sampling does not establish exact exit timing |
 | 0.2 | Capability schema v1, conservative unknown memory, bounded cooldown, visible GPU retry, actual execution metadata | Broader adapter/device validation beyond local GTX and mocked policies |
 | 0.3 | Preflight decode/first frame, dimensions, codec inventory, writable output/disk budget; historical docs labeled | Full-stream corruption and export-time failures remain possible |
 | 1.1 | Bounded raw preview-depth LRU; presentation edits reuse depth; precise invalidation/reset | Continue real-media interaction validation |
