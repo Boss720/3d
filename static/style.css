@@ -634,3 +634,10 @@ footer {
   background: linear-gradient(145deg, #d8a45d22, #191a1c);
   box-shadow: 0 0 24px #d8a45d12;
 }
+
+.preview-stage:fullscreen{width:100vw;height:100vh;min-height:0;aspect-ratio:auto;margin:0;border:0;border-radius:0;background:#000;touch-action:auto}.preview-stage:fullscreen .preview-media{transform:none!important}
+.preview-stage.xreal-sbs-preview{aspect-ratio:32/9;min-height:0}.preview-stage:fullscreen .preview-media>video,.preview-stage:fullscreen .preview-media>img{max-height:none}
+
+/* Local storage controls */
+.storage-files{display:grid;gap:.6rem;max-height:18rem;overflow:auto;margin:1rem 0}.storage-file{display:flex;align-items:flex-start;gap:.65rem;overflow-wrap:anywhere;font-size:.85rem}.storage-file input{width:auto;flex:none;margin-top:.2rem}#copyOutputDirectory{width:100%;box-sizing:border-box}#queuePauseStatus{font-size:.8rem;color:var(--muted);overflow-wrap:anywhere}
+.storage-panel{padding:22px;margin-top:22px}.storage-panel .field-hint{margin-top:10px}.storage-panel .section-divider{margin:20px 0}

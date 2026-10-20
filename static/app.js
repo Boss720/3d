@@ -412,10 +412,10 @@ const frontendContract = (() => {
     return "Waiting for time estimate";
   }
   const performancePresets = Object.freeze({
-    fast: Object.freeze({ layout: "SBS", strength: 5, convergence: 0.5, depth_mode: "depth-anything-v2-small", execution_mode: "auto", input_size: 256, resolution: "1080p", quality: "fast", temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false }),
-    balanced: Object.freeze({ layout: "SBS", strength: 5, convergence: 0.5, depth_mode: "depth-anything-v2-small", execution_mode: "auto", input_size: 384, resolution: "1080p", quality: "balanced", temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false }),
-    quality: Object.freeze({ layout: "SBS", strength: 5, convergence: 0.5, depth_mode: "depth-anything-v2-small", execution_mode: "auto", input_size: 518, resolution: "source", quality: "high", temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false }),
-    conservative4gb: Object.freeze({ layout: "SBS", strength: 5, convergence: 0.5, depth_mode: "depth-anything-v2-small", execution_mode: "auto", input_size: 256, resolution: "1080p", quality: "balanced", temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false })
+    fast: Object.freeze({ layout: "XREAL_SBS", strength: 5, convergence: 0.5, depth_mode: "depth-anything-v2-small", execution_mode: "auto", input_size: 256, resolution: "1080p", quality: "fast", temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false }),
+    balanced: Object.freeze({ layout: "XREAL_SBS", strength: 5, convergence: 0.5, depth_mode: "depth-anything-v2-small", execution_mode: "auto", input_size: 384, resolution: "1080p", quality: "balanced", temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false }),
+    quality: Object.freeze({ layout: "XREAL_SBS", strength: 5, convergence: 0.5, depth_mode: "depth-anything-v2-small", execution_mode: "auto", input_size: 518, resolution: "source", quality: "high", temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false }),
+    conservative4gb: Object.freeze({ layout: "XREAL_SBS", strength: 5, convergence: 0.5, depth_mode: "depth-anything-v2-small", execution_mode: "auto", input_size: 256, resolution: "1080p", quality: "balanced", temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false })
   });
   const settingsKeys = Object.freeze(["layout", "strength", "convergence", "depth_mode", "execution_mode", "input_size", "resolution", "quality", "temporal_smoothing", "edge_refinement", "invert_depth"]);
   function performancePreset(name) {
@@ -430,7 +430,7 @@ const frontendContract = (() => {
     const missing = settingsKeys.find((key) => !Object.prototype.hasOwnProperty.call(settings, key));
     if (missing) throw new Error(`Missing settings field: ${missing}.`);
     const enums = {
-      layout: ["SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"],
+      layout: ["SBS", "XREAL_SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"],
       depth_mode: ["depth-anything-v2-small", "depth-anything-v2-base", "depth-anything-v2-large", "dpt-hybrid-midas", "balanced", "precision"],
       execution_mode: ["auto", "hybrid", "gpu", "cpu"], input_size: [256, 384, 518],
       resolution: ["1080p", "source"], quality: ["fast", "balanced", "high"]
@@ -552,13 +552,14 @@ if (typeof document !== "undefined") (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
   const ids = ["mediaInput","dropZone","browseButton","sourceVideo","sourceImage","processedImage","previewEmpty","previewStage","sourceName","previewState","generatePreview","layoutSelect","formatHint","previewModeLabel","presetSelect","depthMode","depthNote","installSelected","modelRow","modelInput","modelButton","modelState","modelSizeRow","modelSizeLabel","modelSize","midasSizeNote","strength","strengthValue","convergence","convergenceValue","temporalSmoothing","smoothingValue","edgeRefinement","invertDepth","resolution","quality","convertButton","convertCount","convertHint","queueRows","queueEmpty","queueCount","queueHeadingCount","clearQueueButton","applySettingsToReady","queueWorkflowStatus","outputNamingControls","outputNameTemplate","outputNameTemplateHelp","outputNamingStatus","historyPanel","historyStatus","historyRows","historyRefresh","historyMore","enginePill","engineText","toolDescription","toolPath","runtimeDescription","runtimeCommand","modelCards","refreshModels","toast","helpButton","aboutDialog","aboutDone","completionNotifications","completionNotificationStatus","shortcutHelp"];
-  ids.push("executionMode", "executionNote", "previewExecution", "retryGpu", "performancePreset", "performancePresetStatus", "performancePresetSummary", "resetPerformancePreset", "exportPreset", "importPresetButton", "importPresetFile", "calibrationBudget", "calibrateInput", "calibrationStatus", "calibrationReport", "calibrationSummary", "calibrationCandidates", "calibrationScope", "calibrationLimitations", "calibrationStorageWarning", "applyCalibration", "tabCompare", "previewMedia", "sourceDepthCompare", "compareSource", "compareDepth", "compareDivider", "compareControls", "compareSlider", "compareValue", "compareResolution", "zoomIn", "zoomOut", "zoomLabel", "resetZoom", "previewDetail", "previewDetailHint", "processedClipCapability", "processedClipDuration", "generateProcessedClip", "cancelProcessedClip", "processedClipStatus", "processedClipVideo");
+  ids.push("executionMode", "executionNote", "previewExecution", "retryGpu", "performancePreset", "performancePresetStatus", "performancePresetSummary", "resetPerformancePreset", "exportPreset", "importPresetButton", "importPresetFile", "calibrationBudget", "calibrateInput", "calibrationStatus", "calibrationReport", "calibrationSummary", "calibrationCandidates", "calibrationScope", "calibrationLimitations", "calibrationStorageWarning", "applyCalibration", "tabCompare", "previewMedia", "sourceDepthCompare", "compareSource", "compareDepth", "compareDivider", "compareControls", "compareSlider", "compareValue", "compareResolution", "zoomIn", "zoomOut", "zoomLabel", "resetZoom", "previewDetail", "previewDetailHint", "glassesPreview", "processedClipCapability", "processedClipDuration", "generateProcessedClip", "cancelProcessedClip", "processedClipStatus", "processedClipVideo");
+  ids.push("pauseQueue", "queuePauseStatus", "openOutputFolder", "refreshStorage", "storageStatus", "storageUsage", "storageFiles", "deleteStorageFiles", "copyOutputDirectory");
   const ui = Object.fromEntries(ids.map((id) => [id, $(id)]));
   const imageExtensions = new Set(["jpg","jpeg","png","webp"]);
   const videoExtensions = new Set(["mp4","webm","mkv","mov","avi","wmv","flv","ts","mts","m2ts","m4v"]);
   const activeStates = new Set(["uploading","queued","processing"]);
   const layouts = {
-    SBS:["Side by side","Two full-resolution views, side by side."],HALFSBS:["Half side by side","Two squeezed views share a source-sized frame."],
+    SBS:["Side by side","Two full-resolution views, side by side."],XREAL_SBS:["XREAL Full SBS","3840 × 1080 frame; each view is centered without stretching in its 1920 × 1080 eye area."],HALFSBS:["Half side by side","Two squeezed views share a source-sized frame."],
     TB:["Top / bottom","Two full-resolution views, stacked vertically."],HALFTB:["Half top / bottom","Two squeezed views share a source-sized frame."],
     CROSS:["Cross-eye","Right view first, for cross-eye viewing."],ANAGLYPH:["Red / cyan","A color-filter stereo image for red/cyan glasses."],
     DEPTH:["Depth map","A grayscale depth estimate: brighter areas are nearer."],RGBD:["RGB + depth","Original color and depth map, side by side."]
@@ -572,7 +573,7 @@ if (typeof document !== "undefined") (() => {
   let models = [], runtime = null, status = null, statusLoadError = "", customModelAvailable = false, catalogError = "";
   let historyCapabilities = null, historyCursor = null, historyLoading = false;
   let namingCapability = null, currentOutputNameTemplate = "{name}_{layout}";
-  let modelTimer = null, jobTimer = null, jobsBusy = false, modelsBusy = false, submitting = false, queueMutationBusy = false, queueWorkflowMessage = "", toastTimer = null;
+  let modelTimer = null, jobTimer = null, jobsRetryDelay = 0, jobsBusy = false, modelsBusy = false, submitting = false, queueMutationBusy = false, queueWorkflowMessage = "", toastTimer = null;
   let completionNoticesOptedIn = false, completionNotificationBusy = false;
   let completionNoticeTracker = { trackedIds: [], activeIds: [], completedIds: [] };
   let previewClip = { generation: 0, requestPending: false, context: null, job: null, quarantine: null, stale: false, cancelWhenReturned: false, cancelBusy: false, timer: null, error: "", errorKind: "" };
@@ -715,6 +716,12 @@ if (typeof document !== "undefined") (() => {
     catch(error){return `Fix the output name template before uploading: ${error.message}`;}
   }
   function sourceReady() { return previewFile && !sourceError && (isImage(previewFile) ? ui.sourceImage.complete && ui.sourceImage.naturalWidth > 0 : ui.sourceVideo.readyState >= 2); }
+  function drawSourceFrame(source, canvas) {
+    const wasHidden = source === ui.sourceVideo && source.hidden;
+    if (wasHidden) source.hidden = false;
+    try { canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height); }
+    finally { if (wasHidden) source.hidden = true; }
+  }
   function previewClipContext(){return {sourceId:selectedUid,settings:JSON.stringify(getSettings()),startSeconds:ui.sourceVideo.currentTime,durationSeconds:Number(ui.processedClipDuration.value)};}
   function previewClipActive(){return previewClip.requestPending||Boolean(previewClip.quarantine)||previewClip.job&&["queued","processing"].includes(previewClip.job.state);}
   function processedClipBlock(){
@@ -844,6 +851,7 @@ if (typeof document !== "undefined") (() => {
   function updatePreview() {
     const original = previewView === "original";
     const comparing = previewView === "compare" && frontendContract.sourceDepthCompareAvailable(previewResult);
+    ui.previewStage.classList.toggle("xreal-sbs-preview", previewView === "stereo" && ui.layoutSelect.value === "XREAL_SBS");
     ui.tabCompare.hidden=!frontendContract.sourceDepthCompareAvailable(previewResult);
     ui.sourceImage.hidden = !(original && previewFile && isImage(previewFile) && !sourceError);
     ui.sourceVideo.hidden = !(original && previewFile && !isImage(previewFile) && !sourceError);
@@ -859,6 +867,7 @@ if (typeof document !== "undefined") (() => {
     const detailBlock=fullStillBlock();ui.previewDetailHint.textContent=detailBlock||"Full-detail still sends the original file (up to 12 MP, 8192 px per side, and 24 MiB). Neural input remains subject to the hardware cap shown below.";
     ui.previewDetailHint.classList.toggle("preview-detail-warning",Boolean(detailBlock));
     ui.generatePreview.disabled = previewBusy || calibrationBusy || !sourceReady() || Boolean(detailBlock) || Boolean(readiness());
+    ui.glassesPreview.disabled = !previewResult || previewView !== "stereo" || resultRevision !== previewRevision;
     ui.previewExecution.hidden = !previewResult;
     ui.previewExecution.textContent = previewResult ? `${resultRevision !== previewRevision ? "Previous preview · " : ""}${[frontendContract.previewDimensionDetails(previewResult),executionSummary(previewResult.execution) || "Device use not reported",frontendContract.previewExecutionDetails(previewResult)].filter(Boolean).join(" · ")}` : "";
     ui.generatePreview.textContent = previewBusy ? "Processing frame…" : previewResult && resultRevision !== previewRevision ? "↻ Update preview" : "✦ Generate preview";
@@ -905,7 +914,7 @@ if (typeof document !== "undefined") (() => {
   function removeItem(item) {
     if (item.jobId) hiddenJobs.add(item.jobId);
     items=items.filter((x) => x.uid !== item.uid);
-    if (selectedUid===item.uid) { selectedUid=null;invalidateProcessedClipIfStale("Source removed"); previewFile=null; previewResult=null; sourceError=""; previewError=""; resetZoomPan();compareSplit=50;ui.compareSlider.value="50";ui.sourceVideo.pause(); ui.sourceVideo.removeAttribute("src"); ui.sourceVideo.load(); ui.sourceImage.removeAttribute("src"); if(previewUrl)URL.revokeObjectURL(previewUrl); previewUrl=null; ui.sourceName.textContent="No media selected"; updatePreview(); }
+    if (selectedUid===item.uid) { selectedUid=null;invalidateProcessedClipIfStale("Source removed"); previewFile=null; previewResult=null; sourceError=""; previewError=""; resetZoomPan();compareSplit=50;ui.compareSlider.value="50";ui.sourceVideo.pause(); ui.sourceVideo.removeAttribute("src"); ui.sourceVideo.load(); ui.sourceImage.removeAttribute("src"); if(previewUrl)URL.revokeObjectURL(previewUrl); previewUrl=null; ui.sourceName.textContent="No media selected"; markPreviewStale(); }
   }
   function action(text, handler) { const button=el("button","row-button",text); button.type="button"; button.addEventListener("click",handler); return button; }
   function queueAction(text, ariaLabel, key, handler, disabled=false) { const button=action(text,handler);button.setAttribute("aria-label",ariaLabel);button.dataset.actionKey=key;button.disabled=disabled||queueMutationBusy;return button; }
@@ -978,6 +987,7 @@ if (typeof document !== "undefined") (() => {
       const execution=executionSummary(item.execution,item.pipeline);if(execution)copy.append(el("div","queue-execution",execution));else if(item.executionMode)copy.append(el("div","queue-execution",`Requested: ${{auto:"Auto",hybrid:"GPU + CPU",gpu:"NVIDIA GPU",cpu:"CPU only"}[item.executionMode]||item.executionMode} · awaiting execution`));
       const runtimeDetails=progressDetails(item);if(runtimeDetails.length)copy.append(el("div","queue-runtime",runtimeDetails.join(" · ")));
       if(item.historyWarning)copy.append(el("small","queue-source-detail",`History warning: ${String(item.historyWarning).slice(0,240)}`));
+      if(item.cleanupWarning)copy.append(el("small","queue-source-detail",`Cleanup warning: ${item.cleanupWarning}`));
       const preflight=frontendContract.preflightDetails(item.preflight,formatBytes);if(preflight.summary){const budget=el("div","queue-preflight");budget.append(el("div","queue-preflight-summary",preflight.summary));if(preflight.visibleWarning)budget.append(el("small","queue-preflight-warning",preflight.visibleWarning));const extraWarnings=preflight.warnings.filter((warning)=>warning!==preflight.visibleWarning);if(preflight.basis||extraWarnings.length){const details=el("details","queue-preflight-details");details.append(el("summary","","Estimate details"));if(preflight.basis)details.append(el("small","queue-preflight-basis",`Estimate basis: ${preflight.basis}`));for(const warning of extraWarnings)details.append(el("small","queue-preflight-warning",warning));budget.append(details);}copy.append(budget);}
       if(item.settingsSnapshot)copy.append(el("small","queue-settings-detail",`${item.jobId?"Server snapshot":item.settingsFrozen?"Frozen settings":"Unfrozen · uses current settings at submit"}: ${settingsDescription(item.settingsSnapshot)}`));
       else if(!item.jobId&&item.state==="ready")copy.append(el("small","queue-settings-detail","Unfrozen · uses the visible settings when you submit this file."));
@@ -994,6 +1004,11 @@ if (typeof document !== "undefined") (() => {
       const actions=el("div","row-actions");
       if(activeStates.has(item.state)){const progress=el("div","row-progress"),bar=el("span");progress.setAttribute("role","progressbar");progress.setAttribute("aria-label",`Conversion progress for ${item.name}`);progress.setAttribute("aria-valuemin","0");progress.setAttribute("aria-valuemax","100");progress.setAttribute("aria-valuenow",String(item.progress||0));bar.style.width=`${Math.max(2,Math.min(100,item.progress||0))}%`;progress.append(bar);actions.append(progress);}
       if(item.state==="completed"&&item.jobId){const link=el("a","row-button","Download ↓");link.href=`/api/jobs/${encodeURIComponent(item.jobId)}/download`;link.download=item.outputName||"";actions.append(link);}
+      if(item.state==="completed"&&item.jobId){
+        actions.append(queueAction("Reveal file",`Reveal output for ${item.name}`,`reveal-${identity}`,()=>workspaceAction(`/api/jobs/${encodeURIComponent(item.jobId)}/reveal`)));
+        actions.append(queueAction("Save copy",`Save a copy of ${item.name} to the selected folder`,`copy-${identity}`,()=>saveOutputCopy(item)));
+      }
+      if(item.cleanupWarning&&item.jobId)actions.append(queueAction("Retry cleanup",`Retry temporary cleanup for ${item.name}`,`cleanup-${identity}`,async()=>{await workspaceAction(`/api/jobs/${encodeURIComponent(item.jobId)}/cleanup`);await pollJobs();}));
       if(item.jobId&&["queued","processing"].includes(item.state))actions.append(queueAction("Cancel",`Cancel active job ${item.name}`,`cancel-${identity}`,()=>cancelJob(item)));
       if(!item.jobId&&item.state==="ready"){
         const ready=items.filter((entry)=>!entry.jobId&&entry.state==="ready"),position=ready.indexOf(item);
@@ -1020,7 +1035,7 @@ if (typeof document !== "undefined") (() => {
   function saveHidden(){try{sessionStorage.setItem("stereolab.hiddenJobs",JSON.stringify([...hiddenJobs]));}catch{/* Keep this page usable without storage. */}}
   function getSettings(){const mode=ui.depthMode.value;const inputSize=mode==="dpt-hybrid-midas"?"384":mode==="precision"||/^depth-anything-v2-(small|base|large)$/.test(mode)?ui.modelSize.value:"518";return {layout:ui.layoutSelect.value,strength:ui.strength.value,convergence:ui.convergence.value,depth_mode:mode,execution_mode:ui.executionMode.value,input_size:inputSize,resolution:ui.resolution.value,quality:ui.quality.value,temporal_smoothing:ui.temporalSmoothing.value,edge_refinement:String(ui.edgeRefinement.checked),invert_depth:String(ui.invertDepth.checked)};}
   function currentSettingsForPreset(){const raw=getSettings();return {layout:raw.layout,strength:Number(raw.strength),convergence:Number(raw.convergence),depth_mode:raw.depth_mode,execution_mode:raw.execution_mode,input_size:Number(raw.input_size),resolution:raw.resolution,quality:raw.quality,temporal_smoothing:Number(raw.temporal_smoothing),edge_refinement:ui.edgeRefinement.checked,invert_depth:ui.invertDepth.checked};}
-  function settingsDescription(settings){const names={SBS:"Side by side · full",HALFSBS:"Side by side · half",TB:"Top / bottom · full",HALFTB:"Top / bottom · half",CROSS:"Cross-eye",ANAGLYPH:"Anaglyph · red / cyan",DEPTH:"Depth map",RGBD:"RGB + depth"};const models={"depth-anything-v2-small":"Small","depth-anything-v2-base":"Base","depth-anything-v2-large":"Large","dpt-hybrid-midas":"DPT Hybrid · MiDaS",balanced:"Visual approximation",precision:"Custom ONNX"};const devices={auto:"Auto",hybrid:"GPU + CPU · hybrid",gpu:"NVIDIA GPU",cpu:"CPU only"};const sizes=settings.depth_mode==="dpt-hybrid-midas"?"fixed 384 px":`${settings.input_size} px`;return `${names[settings.layout]} · strength ${Number(settings.strength).toFixed(1)} · convergence ${Number(settings.convergence).toFixed(2)} · ${models[settings.depth_mode]} · ${sizes} · ${devices[settings.execution_mode]} · ${settings.resolution==="source"?"Match source":"Up to 1080p"} · ${settings.quality} encoding · smoothing ${Number(settings.temporal_smoothing).toFixed(2)} · edge refinement ${settings.edge_refinement?"on":"off"} · invert ${settings.invert_depth?"on":"off"}`;}
+  function settingsDescription(settings){const names={SBS:"Side by side · full",XREAL_SBS:"XREAL 1S · Full SBS",HALFSBS:"Side by side · half",TB:"Top / bottom · full",HALFTB:"Top / bottom · half",CROSS:"Cross-eye",ANAGLYPH:"Anaglyph · red / cyan",DEPTH:"Depth map",RGBD:"RGB + depth"};const models={"depth-anything-v2-small":"Small","depth-anything-v2-base":"Base","depth-anything-v2-large":"Large","dpt-hybrid-midas":"DPT Hybrid · MiDaS",balanced:"Visual approximation",precision:"Custom ONNX"};const devices={auto:"Auto",hybrid:"GPU + CPU · hybrid",gpu:"NVIDIA GPU",cpu:"CPU only"};const sizes=settings.depth_mode==="dpt-hybrid-midas"?"fixed 384 px":`${settings.input_size} px`;return `${names[settings.layout]} · strength ${Number(settings.strength).toFixed(1)} · convergence ${Number(settings.convergence).toFixed(2)} · ${models[settings.depth_mode]} · ${sizes} · ${devices[settings.execution_mode]} · ${settings.resolution==="source"?"Match source":"Up to 1080p"} · ${settings.quality} encoding · smoothing ${Number(settings.temporal_smoothing).toFixed(2)} · edge refinement ${settings.edge_refinement?"on":"off"} · invert ${settings.invert_depth?"on":"off"}`;}
   function refreshPerformancePresetStatus(){const current=currentSettingsForPreset(),dirty=frontendContract.hasUnsavedSettings(performanceBaseline,current);ui.performancePresetStatus.textContent=`${importedPresetBaseline?"Imported settings":ui.performancePreset.options[ui.performancePreset.selectedIndex]?.text || "Custom settings"} · ${dirty?"Unsaved changes":"Saved preset"}`;ui.performancePresetSummary.textContent=`Exact settings: ${settingsDescription(current)}`;ui.resetPerformancePreset.disabled=ui.performancePreset.value==="custom";}
   function assignSettings(settings){ui.layoutSelect.value=settings.layout;ui.strength.value=String(settings.strength);ui.convergence.value=String(settings.convergence);ui.depthMode.value=settings.depth_mode;ui.executionMode.value=settings.execution_mode;ui.modelSize.value=String(settings.input_size);ui.resolution.value=settings.resolution;ui.quality.value=settings.quality;ui.temporalSmoothing.value=String(settings.temporal_smoothing);ui.edgeRefinement.checked=settings.edge_refinement;ui.invertDepth.checked=settings.invert_depth;}
   function applyPerformancePreset(name){const settings=frontendContract.performancePreset(name);if(!settings)return;importedPresetBaseline=false;performanceBaseline=settings;assignSettings(settings);ui.performancePreset.value=name;ui.presetSelect.value="custom";updateSettings();}
@@ -1028,7 +1043,7 @@ if (typeof document !== "undefined") (() => {
   function exportPresetFile(){try{const preset=frontendContract.exportUserPreset(currentSettingsForPreset());const blob=new Blob([JSON.stringify(preset,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="stereolab-settings-v1.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),0);toast("Settings preset exported.");}catch(error){toast(error.message,true);}}
   async function importPresetFile(file){if(!file)return;try{const parsed=JSON.parse(await file.text()),settings=frontendContract.validateUserPreset(parsed);assignSettings(settings);performanceBaseline={...settings};importedPresetBaseline=true;ui.performancePreset.value="custom";ui.presetSelect.value="custom";updateSettings();toast("Settings imported and validated. No model was installed or downloaded.");}catch(error){toast(`Preset not applied: ${error.message}`,true);}finally{ui.importPresetFile.value="";}}
   async function measureInputDetail(){const blocked=calibrationBlock();if(blocked){toast(blocked,true);return;}ui.sourceVideo.pause();const context=calibrationContext();calibrationBusy=true;calibrationResult=null;calibrationResultContext=null;calibrationNotice="";ui.calibrationReport.hidden=true;ui.applyCalibration.hidden=true;ui.calibrationStatus.textContent="Measuring depth-input inference. One in-flight inference may exceed the selected budget…";updatePreview();let discarded=false;
-    try{const source=isImage(previewFile)?ui.sourceImage:ui.sourceVideo,w=source.naturalWidth||source.videoWidth,h=source.naturalHeight||source.videoHeight;if(!w||!h)throw new Error("The selected source has no decoded frame.");const scale=Math.min(1,960/w,540/h),canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(w*scale));canvas.height=Math.max(1,Math.round(h*scale));canvas.getContext("2d").drawImage(source,0,0,canvas.width,canvas.height);const blob=await new Promise((resolve,reject)=>canvas.toBlob((value)=>value?resolve(value):reject(new Error("Could not capture this frame.")),"image/jpeg",.94));if(!frontendContract.calibrationContextMatches(context,calibrationContext())){discarded=true;calibrationNotice="Measurement discarded because the source frame, settings, or budget changed before it started.";return;}const data=new FormData();data.append("file",blob,"calibration-frame.jpg");data.append("depth_mode",ui.depthMode.value);data.append("execution_mode",ui.executionMode.value);data.append("budget_seconds",String(context.budget));const report=frontendContract.validateCalibrationReport(await request("/api/calibration",{method:"POST",body:data}));if(!frontendContract.calibrationContextMatches(context,calibrationContext())){discarded=true;calibrationNotice="Measurement discarded because the source frame, settings, or budget changed while it was running.";return;}renderCalibrationReport(report);}
+    try{const source=isImage(previewFile)?ui.sourceImage:ui.sourceVideo,w=source.naturalWidth||source.videoWidth,h=source.naturalHeight||source.videoHeight;if(!w||!h)throw new Error("The selected source has no decoded frame.");const scale=Math.min(1,960/w,540/h),canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(w*scale));canvas.height=Math.max(1,Math.round(h*scale));drawSourceFrame(source,canvas);const blob=await new Promise((resolve,reject)=>canvas.toBlob((value)=>value?resolve(value):reject(new Error("Could not capture this frame.")),"image/jpeg",.94));if(!frontendContract.calibrationContextMatches(context,calibrationContext())){discarded=true;calibrationNotice="Measurement discarded because the source frame, settings, or budget changed before it started.";return;}const data=new FormData();data.append("file",blob,"calibration-frame.jpg");data.append("depth_mode",ui.depthMode.value);data.append("execution_mode",ui.executionMode.value);data.append("budget_seconds",String(context.budget));const report=frontendContract.validateCalibrationReport(await request("/api/calibration",{method:"POST",body:data}));if(!frontendContract.calibrationContextMatches(context,calibrationContext())){discarded=true;calibrationNotice="Measurement discarded because the source frame, settings, or budget changed while it was running.";return;}renderCalibrationReport(report);}
     catch(error){calibrationNotice=`Measurement failed: ${String(error.message||error).slice(0,260)}`;ui.calibrationReport.hidden=true;ui.applyCalibration.hidden=true;ui.calibrationStatus.textContent=calibrationNotice;toast(calibrationNotice,true);}
     finally{calibrationBusy=false;updatePreview();if(discarded)ui.calibrationStatus.textContent=calibrationNotice;}}
   function applyMeasuredInputDetail(){if(!calibrationResult||!frontendContract.calibrationApplicable(calibrationResult)||!frontendContract.calibrationContextMatches(calibrationResultContext,calibrationContext())){invalidateCalibrationIfStale();ui.applyCalibration.hidden=true;return;}const size=calibrationResult.fastest_measured_input_size;calibrationResult=null;calibrationResultContext=null;ui.calibrationReport.hidden=true;ui.applyCalibration.hidden=true;ui.modelSize.value=String(size);calibrationNotice=`Applied ${size} px from this one-frame depth-input measurement. Lower detail can lose fine edges.`;updateSettings();ui.calibrationStatus.textContent=calibrationNotice;toast(calibrationNotice);}
@@ -1054,7 +1069,7 @@ if (typeof document !== "undefined") (() => {
       const eligibility=frontendContract.fullStillEligibility({mediaType:isImage(previewFile)?"image":"video",width:w,height:h,fileSizeBytes:previewFile.size});if(detail==="full"&&!eligibility.eligible)throw new Error(eligibility.reason);
       const data=new FormData();
       if(detail==="full")data.append("file",previewFile,previewFile.name);
-      else {const scale=Math.min(1,960/w,540/h),canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(w*scale));canvas.height=Math.max(1,Math.round(h*scale));canvas.getContext("2d").drawImage(source,0,0,canvas.width,canvas.height);const blob=await new Promise((resolve,reject)=>canvas.toBlob((value)=>value?resolve(value):reject(new Error("Could not capture this frame.")),"image/jpeg",.94));data.append("file",blob,"preview-frame.jpg");}
+      else {const scale=Math.min(1,960/w,540/h),canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(w*scale));canvas.height=Math.max(1,Math.round(h*scale));drawSourceFrame(source,canvas);const blob=await new Promise((resolve,reject)=>canvas.toBlob((value)=>value?resolve(value):reject(new Error("Could not capture this frame.")),"image/jpeg",.94));data.append("file",blob,"preview-frame.jpg");}
       data.append("preview_detail",detail);Object.entries(settings).forEach(([key,value])=>data.append(key,value));
       const result=frontendContract.validatePreviewResponse(await request("/api/preview",{method:"POST",body:data}),detail);
       if(revision!==previewRevision){toast("The source or settings changed. Generate again for the current frame.");return;}
@@ -1155,11 +1170,11 @@ if (typeof document !== "undefined") (() => {
     let naming=item.outputNameTemplateSnapshot?{outputNameTemplate:item.outputNameTemplateSnapshot,plannedOutputName:item.plannedOutputName||null,outputName:item.outputName||null}:null,namingError=item.namingSnapshotError||"";
     if(job.naming_schema_version!=null||job.output_name_template!=null||job.planned_output_name!=null||job.output_name!=null){naming=null;namingError="";try{naming=frontendContract.validateQueueJobNaming(job);}catch(error){namingError=error.message;}}
     else if(namingCapability){naming=null;namingError="The server did not include an output name template snapshot. Refresh or upgrade StereoLab.";}
-    Object.assign(item,{jobId:job.id,purpose:job.purpose,name:job.filename||item.name,mediaType:job.media_type||item.mediaType,state:job.state,progress:job.progress,message:job.message,error:job.error,historyWarning:typeof job.history_warning==="string"?job.history_warning.slice(0,240):item.historyWarning||null,outputName:job.output_name??naming?.outputName??item.outputName??null,plannedOutputName:naming?.plannedOutputName??item.plannedOutputName??null,outputNameTemplateSnapshot:naming?.outputNameTemplate??item.outputNameTemplateSnapshot??null,namingFrozen:Boolean(naming||item.namingFrozen),namingSchemaVersion:job.naming_schema_version??item.namingSchemaVersion??null,namingSnapshotError:namingError,layout:job.layout,execution:job.execution,executionMode:job.execution_mode,pipeline:job.pipeline,settingsSchemaVersion:job.settings_schema_version??null,settingsSnapshot:snapshot?.settings||null,settingsSnapshotError:snapshotError,settingsFrozen:Boolean(snapshot),sourceAvailable:snapshot?.sourceAvailable??null,queuePosition:snapshot?.queuePosition??null},reported);
+    Object.assign(item,{jobId:job.id,purpose:job.purpose,name:job.filename||item.name,mediaType:job.media_type||item.mediaType,state:job.state,progress:job.progress,message:job.message,error:job.error,historyWarning:typeof job.history_warning==="string"?job.history_warning.slice(0,240):item.historyWarning||null,cleanupWarning:typeof job.cleanup_warning==="string"?job.cleanup_warning.slice(0,240):null,outputName:job.output_name??naming?.outputName??item.outputName??null,plannedOutputName:naming?.plannedOutputName??item.plannedOutputName??null,outputNameTemplateSnapshot:naming?.outputNameTemplate??item.outputNameTemplateSnapshot??null,namingFrozen:Boolean(naming||item.namingFrozen),namingSchemaVersion:job.naming_schema_version??item.namingSchemaVersion??null,namingSnapshotError:namingError,layout:job.layout,execution:job.execution,executionMode:job.execution_mode,pipeline:job.pipeline,settingsSchemaVersion:job.settings_schema_version??null,settingsSnapshot:snapshot?.settings||null,settingsSnapshotError:snapshotError,settingsFrozen:Boolean(snapshot),sourceAvailable:snapshot?.sourceAvailable??null,queuePosition:snapshot?.queuePosition??null},reported);
     return notice.notify;
   }
   function mergeRemoteJobs(remote){const completed=[];for(const job of remote){if(hiddenJobs.has(job.id)||!frontendContract.isOrdinaryExportJob(job))continue;let item=items.find((x)=>x.jobId===job.id);if(!item){item={uid:job.id};items.push(item);}if(mergeJob(item,job))completed.push(job.filename||item.name);}updateQueue();showCompletionNoticeBatch(completed);}
-  async function refreshQueueFromServer(){const data=await request("/api/jobs"),remote=Array.isArray(data)?data:(data.jobs||[]);mergeRemoteJobs(remote);}
+  async function refreshQueueFromServer(){const data=await request("/api/jobs"),remote=Array.isArray(data)?data:(data.jobs||[]);mergeRemoteJobs(remote);await refreshQueueControl();}
   async function submitItem(item,settings,outputNameTemplate=null){
     const nameTemplate=frontendContract.outputNameTemplateForSubmission(namingCapability,item,outputNameTemplate||currentOutputNameTemplate);
     item.settingsSnapshot=frontendContract.validateSettings(settings);item.settingsFrozen=true;if(nameTemplate){item.outputNameTemplateSnapshot=nameTemplate;item.namingFrozen=true;}item.state="uploading";item.message="Adding to local queue";item.error=null;updateQueue();
@@ -1170,11 +1185,69 @@ if (typeof document !== "undefined") (() => {
     return completed;
   }
   async function convertPending(){if(submitting)return;const pending=items.filter((x)=>!x.jobId&&x.state==="ready");if(!pending.length)return;const settings=currentSettingsForPreset(),block=frontendContract.queueReadiness(pending,settings,{runtime,models,customModelAvailable,catalogError});if(block){toast(block,true);return;}const namingBlock=queueNamingBlock(pending);if(namingBlock){toast(namingBlock,true);ui.outputNameTemplate.focus();return;}submitting=true;updateQueue();const completed=[];try{for(const item of pending){if(items.includes(item)&&item.state==="ready"&&await submitItem(item,frontendContract.effectiveQueueSettings(item,settings),namingCapability?frontendContract.outputNameTemplateForSubmit(item,currentOutputNameTemplate):null))completed.push(item.name);}showCompletionNoticeBatch(completed);}finally{submitting=false;updateQueue();await pollJobs();}}
+  let queuePaused = false, queueControlBusy = false, storageBusy = false;
+  function showQueueControl(data){
+    if(typeof data.paused!=="boolean"||!Number.isInteger(data.pending_count)||data.pending_count<0)throw new Error("Queue controls are unavailable. Refresh status to retry.");
+    queuePaused=data.paused;ui.pauseQueue.disabled=queueControlBusy;ui.pauseQueue.textContent=queuePaused?"Resume queue":"Pause after current job";
+    ui.pauseQueue.setAttribute("aria-pressed",String(queuePaused));
+    ui.queuePauseStatus.textContent=queuePaused?`Queue paused; ${data.pending_count} pending. Current work finishes normally. Restart resumes scheduling.`:`Queue running; ${data.pending_count} pending.`;
+  }
+  async function refreshQueueControl(){
+    try{showQueueControl(await request("/api/queue/control"));}
+    catch(error){ui.pauseQueue.disabled=true;ui.queuePauseStatus.textContent=error.message;}
+  }
+  async function toggleQueuePause(){
+    if(queueControlBusy)return;queueControlBusy=true;ui.pauseQueue.disabled=true;
+    try{showQueueControl(await request("/api/queue/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({paused:!queuePaused})}));}
+    catch(error){toast(error.message,true);}
+    finally{queueControlBusy=false;await refreshQueueControl();}
+  }
+  async function workspaceAction(url,body){
+    try{return await request(url,{method:"POST",...(body?{headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{})});}
+    catch(error){toast(error.message,true);return null;}
+  }
+  async function saveOutputCopy(item){
+    const directory=ui.copyOutputDirectory.value.trim();
+    if(!directory){toast("Enter an existing destination folder in Local storage first.",true);ui.copyOutputDirectory.focus();return;}
+    const result=await workspaceAction(`/api/jobs/${encodeURIComponent(item.jobId)}/copy`,{directory});
+    if(result)toast(`Saved copy: ${result.path}`);
+  }
+  function storageSelection(){
+    const selected=[...ui.storageFiles.querySelectorAll("input:checked")];
+    const bytes=selected.reduce((sum,input)=>sum+Number(input.dataset.bytes||0),0);
+    ui.deleteStorageFiles.disabled=storageBusy||!selected.length;
+    ui.deleteStorageFiles.textContent=selected.length?`Delete ${selected.length} selected temporary files (${formatBytes(bytes)})`:"Delete selected temporary files";
+    return selected.map(input=>input.value);
+  }
+  async function measureStorage(){
+    if(storageBusy)return;storageBusy=true;ui.refreshStorage.disabled=true;ui.deleteStorageFiles.disabled=true;ui.storageStatus.textContent="Measuring managed storage…";
+    try{
+      const report=await request("/api/storage");
+      ui.storageUsage.replaceChildren(...Object.entries(report.categories).map(([name,info])=>el("p","field-hint",`${name}: ${formatBytes(info.bytes)||"0 B"} in ${info.files} files${info.errors.length?" (some entries unavailable)":""}`)));
+      ui.storageFiles.replaceChildren(...report.candidates.slice(0,1000).map(candidate=>{
+        const label=el("label","storage-file"),input=el("input");input.type="checkbox";input.value=candidate.path;input.dataset.bytes=String(candidate.bytes);input.addEventListener("change",storageSelection);
+        label.append(input,el("span","",`${candidate.path} — ${formatBytes(candidate.bytes)}`));return label;
+      }));
+      ui.storageStatus.textContent=`${report.scope} ${report.candidates.length} inactive temporary files available (showing up to 1000).${report.errors.length?" Some entries could not be measured; protected files are excluded.":""}`;
+    }catch(error){ui.storageStatus.textContent=`Storage measurement failed: ${error.message}`;ui.storageFiles.replaceChildren();}
+    finally{storageBusy=false;ui.refreshStorage.disabled=false;storageSelection();}
+  }
+  async function deleteSelectedStorage(){
+    if(storageBusy)return;const paths=storageSelection();if(!paths.length)return;
+    storageBusy=true;ui.deleteStorageFiles.disabled=true;
+    const result=await workspaceAction("/api/storage/cleanup",{paths});storageBusy=false;
+    await measureStorage();await pollJobs();
+    if(result)ui.storageStatus.textContent=`Removed ${result.deleted.length} selected temporary files. ${result.errors.length?result.errors.map(entry=>`${entry.path}: ${entry.error}`).join("; "):"Cleanup complete."}`;
+  }
+  ui.pauseQueue.addEventListener("click",toggleQueuePause);
+  ui.openOutputFolder.addEventListener("click",()=>workspaceAction("/api/output-folder/open"));
+  ui.refreshStorage.addEventListener("click",measureStorage);
+  ui.deleteStorageFiles.addEventListener("click",deleteSelectedStorage);
   async function pollJobs(){
     updateCompletionNotificationControls();if(jobsBusy)return;jobsBusy=true;clearTimeout(jobTimer);jobTimer=null;
-    try{await refreshQueueFromServer();}
-    catch(error){ui.queueEmpty.hidden=items.length>0;if(!items.length){ui.queueEmpty.querySelector("strong").textContent="Could not restore the local queue";ui.queueEmpty.querySelector("small").textContent=error.message;}else toast(`Queue refresh failed: ${error.message}`,true);}
-    finally{jobsBusy=false;if(items.some((x)=>["queued","processing"].includes(x.state)))jobTimer=setTimeout(pollJobs,1500);}
+    try{await refreshQueueFromServer();jobsRetryDelay=0;ui.queueEmpty.querySelector("strong").textContent="A little empty, for now.";ui.queueEmpty.querySelector("small").textContent="Add media above. Completed exports are ready to download here.";}
+    catch(error){jobsRetryDelay=Math.min(30000,jobsRetryDelay?jobsRetryDelay*2:1500);ui.queueEmpty.hidden=items.length>0;if(!items.length){ui.queueEmpty.querySelector("strong").textContent="Could not restore the local queue";ui.queueEmpty.querySelector("small").textContent=`${error.message} Retrying automatically; Refresh status can retry now.`;}else toast(`Queue refresh failed: ${error.message}`,true);}
+    finally{jobsBusy=false;const delay=jobsRetryDelay||(items.some((x)=>["queued","processing"].includes(x.state))?1500:0);if(delay)jobTimer=setTimeout(pollJobs,delay);}
   }
   async function cancelJob(item){try{await request(`/api/jobs/${encodeURIComponent(item.jobId)}/cancel`,{method:"POST"});item.message="Cancellation requested";updateQueue();await pollJobs();}catch(error){toast(error.message,true);}}
   ui.browseButton.addEventListener("click",(event)=>{event.stopPropagation();ui.mediaInput.click();});ui.dropZone.addEventListener("click",(event)=>{if(event.target!==ui.browseButton)ui.mediaInput.click();});
@@ -1184,12 +1257,13 @@ if (typeof document !== "undefined") (() => {
   ui.zoomIn.addEventListener("click",()=>applyZoomPan(zoomState.zoom+0.25));ui.zoomOut.addEventListener("click",()=>applyZoomPan(zoomState.zoom-0.25));ui.resetZoom.addEventListener("click",resetZoomPan);ui.previewStage.addEventListener("keydown",handlePreviewKeydown);ui.previewStage.addEventListener("pointerdown",handlePreviewPointerDown);ui.previewStage.addEventListener("pointermove",handlePreviewPointerMove);ui.previewStage.addEventListener("pointerup",handlePreviewPointerEnd);ui.previewStage.addEventListener("pointercancel",handlePreviewPointerEnd);ui.compareSlider.addEventListener("input",updateCompareSplit);window.addEventListener("resize",()=>applyZoomPan());
   ui.sourceImage.addEventListener("load",()=>{sourceError="";markPreviewStale();});ui.sourceVideo.addEventListener("loadeddata",()=>{sourceError="";markPreviewStale();});ui.sourceVideo.addEventListener("seeked",markPreviewStale);ui.sourceVideo.addEventListener("timeupdate",()=>{if(!ui.sourceVideo.paused&&previewResult&&resultRevision===previewRevision)markPreviewStale();invalidateProcessedClipIfStale("Video timestamp changed");updateProcessedClipPanel();refreshCalibrationControls();});
   ui.sourceVideo.addEventListener("error",()=>{if(!previewFile)return;sourceError="This browser cannot decode the video container or codec. You can still convert it locally with FFmpeg.";updatePreview();});ui.sourceImage.addEventListener("error",()=>{if(!previewFile)return;sourceError="This browser could not open the image. Try another source file.";updatePreview();});
+  ui.glassesPreview.addEventListener("click",async()=>{try{if(document.fullscreenElement===ui.previewStage){await document.exitFullscreen();}else{await ui.previewStage.requestFullscreen();}}catch{toast("The browser could not open the fullscreen preview on this display.",true);}});document.addEventListener("fullscreenchange",()=>{ui.glassesPreview.textContent=document.fullscreenElement===ui.previewStage?"Exit fullscreen":"View on glasses";});
   ui.generatePreview.addEventListener("click",generatePreview);ui.previewDetail.addEventListener("change",markPreviewStale);ui.generateProcessedClip.addEventListener("click",generateProcessedClip);ui.cancelProcessedClip.addEventListener("click",cancelProcessedClip);ui.processedClipDuration.addEventListener("change",()=>{invalidateProcessedClipIfStale("Clip length changed");updateProcessedClipPanel();});ui.retryGpu.addEventListener("click",retryGpuAction);ui.presetSelect.addEventListener("change",()=>{applyPreset();refreshPerformancePresetStatus();});
   ui.performancePreset.addEventListener("change",()=>{if(ui.performancePreset.value==="custom"){performanceBaseline=currentSettingsForPreset();importedPresetBaseline=false;updateSettings(false);}else applyPerformancePreset(ui.performancePreset.value);});ui.resetPerformancePreset.addEventListener("click",resetPerformancePreset);ui.exportPreset.addEventListener("click",exportPresetFile);ui.importPresetButton.addEventListener("click",()=>ui.importPresetFile.click());ui.importPresetFile.addEventListener("change",()=>importPresetFile(ui.importPresetFile.files[0]));
   ui.calibrationBudget.addEventListener("change",refreshCalibrationControls);ui.calibrateInput.addEventListener("click",measureInputDetail);ui.applyCalibration.addEventListener("click",applyMeasuredInputDetail);
   ["strength","convergence","temporalSmoothing"].forEach((id)=>ui[id].addEventListener("input",()=>{ui.presetSelect.value="custom";updateSettings();}));["edgeRefinement","invertDepth"].forEach((id)=>ui[id].addEventListener("change",()=>{ui.presetSelect.value="custom";updateSettings();}));
   ["layoutSelect","modelSize","resolution","quality","executionMode"].forEach((id)=>ui[id].addEventListener("change",()=>updateSettings()));ui.depthMode.addEventListener("change",()=>{updateSettings();renderModels();});
-  ui.convertButton.addEventListener("click",convertPending);ui.modelButton.addEventListener("click",()=>ui.modelInput.click());ui.modelInput.addEventListener("change",()=>uploadModel(ui.modelInput.files[0]));ui.installSelected.addEventListener("click",()=>installModel(ui.depthMode.value));ui.refreshModels.addEventListener("click",()=>{loadModels();loadStatus();});
+  ui.convertButton.addEventListener("click",convertPending);ui.modelButton.addEventListener("click",()=>ui.modelInput.click());ui.modelInput.addEventListener("change",()=>uploadModel(ui.modelInput.files[0]));ui.installSelected.addEventListener("click",()=>installModel(ui.depthMode.value));ui.refreshModels.addEventListener("click",()=>{loadModels();loadStatus();pollJobs();});
   ui.completionNotifications.addEventListener("click",toggleCompletionNotifications);
   window.addEventListener("keydown",(event)=>{const action=frontendContract.keyboardShortcutAction({altKey:event.altKey,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,repeat:event.repeat,defaultPrevented:event.defaultPrevented,isComposing:event.isComposing,code:event.code,target:event.target,modalOpen:Boolean(document.querySelector("dialog[open]")),previewEnabled:!ui.generatePreview.disabled,submitEnabled:!ui.convertButton.disabled});if(!action)return;event.preventDefault();(action==="preview"?ui.generatePreview:ui.convertButton).click();});
   window.addEventListener("focus",updateCompletionNotificationControls);document.addEventListener("visibilitychange",()=>{if(!document.hidden)updateCompletionNotificationControls();});

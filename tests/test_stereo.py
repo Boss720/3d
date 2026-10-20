@@ -52,6 +52,64 @@ class StereoTests(unittest.TestCase):
                     self.assertEqual(packed.shape, (size[1], size[0], 3))
                     self.assertEqual(packed.dtype, np.uint8)
 
+    def test_xreal_sbs_uses_fixed_size_eyes_with_centered_aspect_fit(self):
+        # Expected fit rectangles are specified directly for each shape so the
+        # test checks visible placement and padding, not the production formula.
+        cases = (
+            ('portrait', 2, 4, (690, 0, 540, 1080)),
+            ('16:9', 16, 9, (0, 0, 1920, 1080)),
+            ('ultrawide', 8, 2, (0, 300, 1920, 480)),
+            ('odd dimensions', 7, 5, (204, 0, 1512, 1080)),
+            ('single pixel', 1, 1, (420, 0, 1080, 1080)),
+        )
+        left_color = np.array((13, 47, 91), dtype=np.uint8)
+        right_color = np.array((173, 211, 239), dtype=np.uint8)
+        for name, width, height, (x, y, fitted_width, fitted_height) in cases:
+            with self.subTest(shape=name):
+                frame = np.zeros((height, width, 3), dtype=np.uint8)
+                left = np.empty_like(frame)
+                left[:] = left_color
+                right = np.empty_like(frame)
+                right[:] = right_color
+                originals = tuple(value.copy() for value in (frame, left, right))
+                depth = np.zeros((height, width), dtype=np.float32)
+
+                packed = pack_output(frame, depth, left, right, 'XREAL_SBS')
+
+                self.assertEqual(layout_size(width, height, 'XREAL_SBS'), (3840, 1080))
+                self.assertEqual(packed.shape, (1080, 3840, 3))
+                self.assertEqual(packed.dtype, np.uint8)
+                for eye_start, color in ((0, left_color), (1920, right_color)):
+                    eye = packed[:, eye_start:eye_start + 1920]
+                    if x:
+                        np.testing.assert_array_equal(eye[y:y + fitted_height, :x], 0)
+                        np.testing.assert_array_equal(eye[y:y + fitted_height, x + fitted_width:], 0)
+                    if y:
+                        np.testing.assert_array_equal(eye[:y], 0)
+                        np.testing.assert_array_equal(eye[y + fitted_height:], 0)
+                    self.assertTrue(np.all(eye[y:y + fitted_height, x:x + fitted_width] == color))
+                np.testing.assert_array_equal(packed[y, x], left_color)
+                np.testing.assert_array_equal(packed[y, 1920 + x], right_color)
+                for actual, original in zip((frame, left, right), originals):
+                    np.testing.assert_array_equal(actual, original)
+
+    def test_xreal_sbs_downscales_large_eyes_without_cropping_or_reordering(self):
+        frame = np.zeros((1350, 2400, 3), dtype=np.uint8)
+        left = np.empty_like(frame)
+        left[:] = (23, 67, 109)
+        right = np.empty_like(frame)
+        right[:] = (151, 197, 241)
+        originals = (left.copy(), right.copy())
+        depth = np.zeros(frame.shape[:2], dtype=np.float32)
+
+        packed = pack_output(frame, depth, left, right, 'XREAL_SBS')
+
+        self.assertEqual(packed.shape, (1080, 3840, 3))
+        self.assertTrue(np.all(packed[:, :1920] == originals[0][0, 0]))
+        self.assertTrue(np.all(packed[:, 1920:] == originals[1][0, 0]))
+        np.testing.assert_array_equal(left, originals[0])
+        np.testing.assert_array_equal(right, originals[1])
+
     def test_depth_output_preserves_orientation_and_rgbd_source(self):
         frame = np.full((3, 3, 3), (10, 20, 30), dtype=np.uint8)
         depth = np.tile(np.array([0, .5, 1], dtype=np.float32), (3, 1))

@@ -13,7 +13,9 @@ import cv2
 import numpy as np
 
 
-LAYOUTS = frozenset({'SBS', 'HALFSBS', 'TB', 'HALFTB', 'CROSS', 'ANAGLYPH', 'DEPTH', 'RGBD'})
+XREAL_FULL_SBS = 'XREAL_SBS'
+XREAL_EYE_SIZE = (1920, 1080)
+LAYOUTS = frozenset({'SBS', 'XREAL_SBS', 'HALFSBS', 'TB', 'HALFTB', 'CROSS', 'ANAGLYPH', 'DEPTH', 'RGBD'})
 
 
 def _frame_size(frame: np.ndarray) -> tuple[int, int]:
@@ -78,6 +80,8 @@ def layout_size(width: int, height: int, layout: str) -> tuple[int, int]:
         raise ValueError('Frame dimensions must be positive.')
     if layout not in LAYOUTS:
         raise ValueError(f'Unsupported output layout: {layout}')
+    if layout == XREAL_FULL_SBS:
+        return XREAL_EYE_SIZE[0] * 2, XREAL_EYE_SIZE[1]
     if layout in {'SBS', 'CROSS', 'RGBD'}:
         return width * 2, height
     if layout == 'TB':
@@ -107,6 +111,19 @@ def pack_output(
         raise ValueError('Stereo eye dimensions must match the source frame.')
     if layout == 'SBS':
         return np.concatenate((left, right), axis=1)
+    if layout == XREAL_FULL_SBS:
+        target_width, target_height = XREAL_EYE_SIZE
+
+        canvas = np.zeros((target_height, target_width * 2, 3), dtype=np.uint8)
+        scale = min(target_width / width, target_height / height)
+        fitted_width = max(1, min(target_width, round(width * scale)))
+        fitted_height = max(1, min(target_height, round(height * scale)))
+        interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+        x, y = (target_width - fitted_width) // 2, (target_height - fitted_height) // 2
+        for offset, eye in ((0, left), (target_width, right)):
+            destination = canvas[y:y + fitted_height, offset + x:offset + x + fitted_width]
+            cv2.resize(eye, (fitted_width, fitted_height), dst=destination, interpolation=interpolation)
+        return canvas
     if layout == 'CROSS':
         return np.concatenate((right, left), axis=1)
     if layout == 'TB':
@@ -129,6 +146,46 @@ def render_output(frame: np.ndarray, depth: np.ndarray, strength: float,
         return pack_output(frame, depth, frame, frame, layout)
     left, right = make_eye_pair(frame, depth, strength, convergence)
     return pack_output(frame, depth, left, right, layout)
+
+
+class StereoRenderer:
+    """Job-owned warp scratch space; returned images always own their pixels.
+
+    One instance belongs to one processing thread. A changed frame size replaces
+    the scratch buffers, keeping memory bounded to the current source size.
+    """
+
+    def __init__(self):
+        self._shape = None
+
+    def render(self, frame: np.ndarray, depth: np.ndarray, strength: float,
+               convergence: float, layout: str) -> np.ndarray:
+        shape = _frame_size(frame)
+        if layout in {'DEPTH', 'RGBD'}:
+            return pack_output(frame, depth, frame, frame, layout)
+        height, width = shape
+        if depth.shape != shape:
+            raise ValueError('Depth dimensions must match the source frame.')
+        scale = _bounded_number(strength, 0.0, 10.0, 'Strength') / 10.0
+        plane = _bounded_number(convergence, 0.0, 1.0, 'Convergence')
+        if scale == 0:
+            return pack_output(frame, depth, frame, frame, layout)
+        if self._shape != shape:
+            self._x = np.broadcast_to(np.arange(width, dtype=np.float32), shape)
+            self._y = np.ascontiguousarray(np.broadcast_to(np.arange(height, dtype=np.float32)[:, None], shape))
+            self._disparity = np.empty(shape, dtype=np.float32)
+            self._map = np.empty(shape, dtype=np.float32)
+            self._shape = shape
+        np.copyto(self._disparity, depth, casting='unsafe')
+        np.nan_to_num(self._disparity, copy=False, nan=.5, posinf=1.0, neginf=0.0)
+        np.clip(self._disparity, 0.0, 1.0, out=self._disparity)
+        np.subtract(self._disparity, plane, out=self._disparity)
+        np.multiply(self._disparity, np.float32(width * .015 * scale), out=self._disparity)
+        np.subtract(self._x, self._disparity, out=self._map)
+        left = cv2.remap(frame, self._map, self._y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        np.add(self._x, self._disparity, out=self._map)
+        right = cv2.remap(frame, self._map, self._y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        return pack_output(frame, depth, left, right, layout)
 
 
 def refine_depth(frame: np.ndarray, depth: np.ndarray, edge_refinement: bool) -> np.ndarray:

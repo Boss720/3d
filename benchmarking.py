@@ -41,7 +41,7 @@ DEFAULT_API_URL = "http://127.0.0.1:8766"
 DEFAULT_MODEL = "balanced"
 DEFAULT_DEVICE = "cpu"
 DEFAULT_REPEATS = 3
-VALID_LAYOUTS = {"SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"}
+VALID_LAYOUTS = {"SBS", "XREAL_SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"}
 VALID_DEVICES = {"auto", "cpu", "gpu", "hybrid"}
 VALID_QUALITIES = {"fast", "balanced", "high"}
 SYNTHETIC_IMAGE_PATTERNS = {"fine_detail", "thin_objects", "portrait"}
@@ -204,6 +204,8 @@ def expected_output_dimensions(width: int, height: int, layout: str) -> tuple[in
         raise ValueError(f"Unsupported output layout: {layout}.")
     if width < 1 or height < 1:
         raise ValueError("Input dimensions must be positive.")
+    if layout == "XREAL_SBS":
+        return 3840, 1080
     if layout in {"SBS", "CROSS", "RGBD"}:
         return width * 2, height
     if layout == "TB":

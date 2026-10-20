@@ -1086,3 +1086,103 @@ UI PNGs plus their existing prompts is retained in
 Their modification timestamps remain18October, and no task lane edited/staged
 those files. Final tracked changes are only HANDOFF.md, ROADMAP.md and PROGRESS.md
 with this resumed evidence; source/tests remain at the committed checkpoint.
+
+## Code review - 20 October 2026
+
+Objective: review the current working tree and suggest prioritized improvements.
+The existing six modified implementation files and untracked output assets are
+preserved. Review lanes are read-only: conversion/depth, queue/history reliability,
+and frontend behavior. The coordinator owns application integration review and
+verification. Planned evidence: independent source inspection, existing CPU test
+suite, and small isolated reproductions for suspected defects. No fixes, commit,
+model downloads, or live GPU workload are part of this review.
+
+Review completed: coordinator independently reproduced worker termination after
+cleanup PermissionError, premature history eviction by capacity precheck,
+nonfinite frame-count rejection with unreleased capture, removed-source preview
+acceptance, and missing retry after initial queue-fetch failure. Existing CPU
+suite: 406 tests in 14.201s, OK with two skips. Actual UI functions were exercised
+in isolated Node VMs; filesystem/metadata errors were injected. This does not
+establish rendered-browser or live-codec failure behavior. Full prioritized
+findings, suggested changes and acceptance criteria are saved in
+`output/reviews/code-review-2026-10-20.md`. No application/test source changes,
+commits, downloads, live services or GPU workloads were made for this review.
+
+## Review fixes - 20 October 2026
+
+User authorized proceeding with the five reviewed fixes. Ownership for this
+wave: coordinator owns main.py worker cleanup/video lifetime, shared preflight
+metadata normalization, backend regression tests, integration and final gates;
+history lane owns job_history.py and its storage regression tests; frontend lane
+owns static/app.js, static/index.html and frontend lifecycle regression tests;
+layout-coverage lane owns tests/test_stereo.py. Existing XREAL/UI edits and output
+assets are preserved. Acceptance: reproduce each reported failure with a semantic
+regression, apply focused fixes, independently inspect combined diffs, then run
+full CPU/GPU-environment suites and source syntax/whitespace gates. No commit or
+executable rebuild is requested.
+
+Implementation wave complete: history admission precheck is read-only; selected
+source removal invalidates pending preview/calibration responses; failed queue
+restoration retries with capped backoff and manual status refresh includes jobs.
+Temporary-file cleanup records visible warnings without replacing conversion
+outcomes, and unexpected per-job exceptions no longer stop the queue consumer.
+Preflight/conversion share finite video metadata normalization; capture lifetime
+now includes metadata and encoder setup. New XREAL_SBS tests independently check
+packing, eye order, centering and up/downscaling. Coordinator reviewed combined
+diffs against a saved baseline; original XREAL/UI assets and unrelated edits are
+preserved. Red regressions were captured for each of the five findings before
+fixing. Focused integration passed 31 tests, including a real Windows upload
+handle lock and a rejected-upload/prior-history download check. Final full-suite
+and real CPU video verification follow.
+
+Final verification completed. CPU and GPU-runtime environments each passed 435
+tests with two existing skips (13.060s / 12.764s). Python syntax passed for 69
+files; app.js and the lifecycle harness passed Node syntax; git diff --check
+passed. A generated CPU/libx264 export with an actual decoder reporting injected
+NaN frame-count metadata decoded to all six expected 128x48 frames at 6 FPS with
+audio, removed its upload and kept unknown total/ETA unset. This was real CPU
+media processing, not neural/GPU inference. Frontend cases execute actual closure
+functions under a DOM/network/timer fixture; no rendered-browser claim is made.
+Independent review found one adjacent existing encoder-setup leak; a red test
+proved failure to stop FFmpeg when stderr-reader startup failed, then the guard
+and both final suites passed. No further review finding remains open in this
+slice. Logs/report: `.runtime/review-fixes-verification/`; user-facing summary:
+`output/reviews/code-review-fixes-2026-10-20.md`. Original index.html/style.css,
+benchmarking.py and stereo.py matched the saved baseline byte for byte. Main/UI
+XREAL behavior remains in place. Source changes are uncommitted; no EXE rebuild,
+model download or live service/GPU workload was performed.
+
+## 20 October 2026 — QoL batch
+Authorized roadmap continuation: queue pause/resume, native output controls, managed storage cleanup and measured rendering optimization. Coordinator owns main.py, job_queue.py, static assets and integration tests; rendering worker owns stereo.py and new rendering-only tests/benchmark. Preserve all existing edits; no commits. Verify full CPU/GPU-environment suites, frontend syntax, and matched rendering measurements.
+
+
+### QoL batch verification and handoff
+
+Queue pause/resume, immediate pending cancellation while paused, native folder/reveal
+helpers, destination copies, managed temporary cleanup/retry and job-owned rendering
+buffers integrated. Independent storage review found canceled-upload ownership and
+inventory-lock issues; both corrected, with canceled/locked-upload regression.
+Coordinator inspected changed implementations and independently verified worker media
+hashes and decoded frames. Actual browser pause/resume, measurement and export-copy
+checks passed on an isolated owned loopback server; copied bytes match the original.
+CPU and GPU-environment suites each passed 462 tests with 3 skips (18.076/17.987s).
+Logs: .runtime/qol-cpu-tests-final.log and .runtime/qol-gpu-env-tests-final.log.
+Python syntax passed 76 files; Node syntax and git diff --check passed.
+Detailed scope/limits: output/reviews/qol-batch-2026-10-20.md.
+
+Remaining next slices: direct per-job destinations need durable output-reference
+extension; current Save copy preserves managed originals. Native Explorer windows
+and packaged validation remain open. Model/output deletion controls, saved projects,
+persistent depth cache and representative long/neural performance runs remain on
+ROADMAP.md. No commit or EXE build. Existing unrelated edits remain intact.
+
+
+## Coordinator independent repeat
+
+Repeated `scripts/verify_render_exports.py` after both full test suites finished.
+Median old/new complete run_video wall time: 2.073524/1.942392 seconds
+(6.32% lower wall time in this separate short CPU sample).
+All six encoded files, decoded frames and decoded audio matched exactly.
+Evidence: `D:\Users\Hp\Documents\ChatGPT\3d\.runtime\render-export-verification-c301c1ee49be44bb9530e7d354f795df` and `.runtime/qol-render-exports-independent.log`.
+This confirms a local repeat improvement for this generated approximation/XREAL
+workload; it does not establish whole-film, neural-inference or GPU gains.

@@ -127,7 +127,7 @@ processing and other GPU applications can change timing and memory use.
 4. Use **Generate preview** to process the current photo/video frame. Inspect Stereo or Depth map. Strength, convergence, layout, inversion and refinement edits reuse valid inferred depth; changing the frame, engine, input detail or execution settings invalidates it. Temporal smoothing only applies during video export.
 5. Convert the queue and download the results. Completed files remain in `outputs/`.
 
-Media stays on the local server. Only model installation contacts Hugging Face. Model weights are stored in `.runtime/models/`. Uploaded conversion sources are removed when processing finishes. The queue survives browser refresh while the server is running; source files must be added again for previews after refresh. Queue state is not retained across server restarts; completed files remain on disk. Clearing the browser's finished list does not delete exports.
+Media stays on the local server. Only model installation contacts Hugging Face. Model weights are stored in `.runtime/models/`. Uploaded conversion sources are removed when processing finishes. If Windows locks a temporary file or prevents its removal, the queue shows a cleanup warning and preserves the file; other jobs continue. Close apps using that file and check local data-folder permissions. The queue survives browser refresh while the server is running; source files must be added again for previews after refresh. Temporary queue-loading failures retry automatically with a delay capped at 30 seconds; **Refresh status** also refreshes the queue immediately. Queue state is not retained across server restarts; completed files remain on disk. Clearing the browser's finished list does not delete exports.
 
 ## Depth engines
 
@@ -388,3 +388,31 @@ CPU/GPU/hybrid exports and compares decoded frames. Install `httpx` into the cho
 verification environment if needed. Reports remain in `.runtime/gpu-verification/`.
 
 StereoLab is independent of Owl3D. It does not reuse proprietary Owl3D weights, processor code or account protocols, and does not claim matching output quality. Spatial/MV-HEVC, live desktop conversion, VR pairing and learned video-depth models remain outside this version. See `COMPATIBILITY_SPEC.md` and `PROGRESS.md` for scope and evidence.
+
+
+### Queue scheduling, storage and completed exports
+
+Use **Pause after current job** to let active work finish and hold subsequent jobs,
+including newly submitted exports and processed clips. **Resume queue** preserves
+pending order. Pending cancellation remains available while paused. Scheduling pause
+is local to the current server launch; restarting resumes scheduling. This does not
+pause an active video or provide interrupted-export recovery.
+
+**Local storage → Measure storage** reports managed uploads, preview segments,
+outputs and models. Select inactive temporary files explicitly before deleting;
+active/staged uploads and active-job proxies are protected again at deletion time.
+Models and completed outputs are measured but are not offered for temporary cleanup.
+A job's **Retry cleanup** action retries its recorded failed cleanup without changing
+the conversion outcome. Close other apps holding files open before retrying.
+
+**Open output folder** and **Reveal file** launch Windows Explorer for validated
+managed paths. To save elsewhere, enter an existing writable folder under Local
+storage, then use **Save copy** on a completed job. Copies never overwrite an existing
+file; the managed original stays available for history/downloads, so copies consume
+additional storage. Direct conversion to a custom destination remains planned.
+
+Video exports now reuse job-owned stereo-warp scratch buffers and pack XREAL output
+into one combined canvas. Matched outputs are unchanged. Three short CPU-only
+approximation/XREAL export pairs showed a local median of 2.300 versus 2.088 seconds;
+this is not a promised gain for other footage or GPU inference. See
+[measurement scope and raw evidence](output/reviews/render-optimization-2026-10-20.md).

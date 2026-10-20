@@ -67,30 +67,34 @@ def _decoded_size(frame: object) -> tuple[int, int]:
     return int(shape[1]), int(shape[0])
 
 
+def video_metadata(capture) -> tuple[int, int, int | None, float, bool]:
+    """Normalize decoder metadata consistently for preflight and conversion."""
+    width = _positive_number(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = _positive_number(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if width is None or height is None or int(width) < 1 or int(height) < 1:
+        raise RuntimeError('Video frame dimensions are invalid. Re-encode it as H.264 MP4 and retry.')
+    frames = _positive_number(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames = int(frames) if frames is not None and int(frames) > 0 else None
+    fps = _positive_number(capture.get(cv2.CAP_PROP_FPS))
+    return int(width), int(height), total_frames, fps if fps is not None else 30.0, fps is None
+
+
 def _read_video(source: Path, warnings: list[str]) -> tuple[int, int, int | None, float, bool]:
     capture = None
     try:
         capture = cv2.VideoCapture(str(source))
         if not capture.isOpened():
             raise RuntimeError('Could not open this video. Re-encode it as H.264 MP4 and retry.')
-        width = _positive_number(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = _positive_number(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if width is None or height is None or int(width) < 1 or int(height) < 1:
-            raise RuntimeError('Video frame dimensions are invalid. Re-encode it as H.264 MP4 and retry.')
+        width, height, total_frames, fps, fps_provisional = video_metadata(capture)
         ok, frame = capture.read()
         if not ok or frame is None:
             raise RuntimeError('The first video frame could not be decoded. Re-encode it as H.264 MP4 and retry.')
         _decoded_size(frame)
-        frames = _positive_number(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-        total_frames = int(frames) if frames is not None and int(frames) > 0 else None
         if total_frames is None:
             warnings.append('Frame count is unavailable; total output disk demand cannot be estimated.')
-        fps = _positive_number(capture.get(cv2.CAP_PROP_FPS))
-        fps_provisional = fps is None
         if fps_provisional:
-            fps = 30.0
             warnings.append('Source frame rate is unavailable or invalid; 30 FPS is the provisional fallback. Export probes timing again.')
-        return int(width), int(height), total_frames, fps, fps_provisional
+        return width, height, total_frames, fps, fps_provisional
     except (cv2.error, OSError):
         raise RuntimeError('Video decoding failed. Re-encode it as H.264 MP4 and retry.') from None
     finally:

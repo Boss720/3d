@@ -175,6 +175,31 @@ class HistoryIntegrationTests(unittest.TestCase):
         self.assertEqual(client.get(f"/api/history/{completed['job_id']}/download").status_code, 404)
         self.assertFalse(client.get('/api/history').json()['items'][0]['source_available'])
 
+    def test_rejected_upload_at_history_capacity_preserves_prior_download(self):
+        store = HistoryStore(self.root, 'rejected-upload', max_records=1).open()
+        self.addCleanup(store.close)
+        main.HISTORY = store
+        record = store.admit(self.metadata())
+        store.mark_processing(record['job_id'])
+        output = self.outputs / record['planned_output_name']
+        output.write_bytes(b'preserved completed export')
+        store.finish(record['job_id'], 'completed',
+                     output={'name': output.name, 'size_bytes': output.stat().st_size})
+        store.close()
+        store.open()
+        with patch.object(main, 'MAX_UPLOAD_BYTES', 1):
+            response = self.submit()
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertEqual(main.JOBS, {})
+        self.assertEqual(main.JOB_QUEUE.pending_ids(), ())
+        self.assertEqual(list(self.uploads.iterdir()), [])
+        client = TestClient(main.app, base_url='http://127.0.0.1')
+        rows = client.get('/api/history').json()['items']
+        self.assertEqual([item['job_id'] for item in rows], [record['job_id']])
+        download = client.get(f"/api/history/{record['job_id']}/download")
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(download.content, b'preserved completed export')
+
     def test_history_http_validation_and_disabled_response(self):
         client = TestClient(main.app, base_url='http://127.0.0.1')
         self.assertEqual(client.get('/api/history').status_code, 409)

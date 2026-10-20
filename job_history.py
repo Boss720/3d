@@ -460,8 +460,16 @@ class HistoryStore:
 
     def check_capacity(self):
         """Reject before upload staging; admission rechecks in its transaction."""
-        with self._transaction() as connection:
-            self._prune(connection, reserve=1)
+        with self._lock:
+            self._require(write=True)
+            try:
+                prunable = sum(record['state'] in _TERMINAL for record in self._records())
+                count = self._connection.execute('SELECT COUNT(*) FROM exports').fetchone()[0]
+                if count - prunable + 1 > self.max_records:
+                    raise HistoryCapacityError('History has no room; unfinished or invalid records cannot be pruned automatically.')
+            except sqlite3.Error as exc:
+                self._degraded = True
+                raise HistoryUnavailable('History cannot be read; no durable change was accepted.') from exc
 
     def edit_pending(self, job_id, *, settings=_UNCHANGED, output_name_template=_UNCHANGED):
         with self._transaction() as connection:

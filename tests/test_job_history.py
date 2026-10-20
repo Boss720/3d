@@ -160,6 +160,104 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(marker.read_bytes(), b'source')
         self.assertEqual(path.read_bytes(), b'finished-output')
 
+    def completed_prior(self, name='desktop', count=2):
+        first = self.store(name, max_records=count).open()
+        records, paths = [], []
+        for index in range(count):
+            self.now += 1
+            record = first.admit(self.metadata(filename=f'source-{index}.png'))
+            path, reference = self.output(record)
+            first.mark_processing(record['job_id'])
+            records.append(first.finish(record['job_id'], 'completed', output=reference))
+            paths.append(path)
+        first.close()
+        return self.store(name, max_records=count).open(), records, paths
+
+    def history_rows(self, store):
+        return tuple(tuple(row) for row in store._connection.execute('SELECT * FROM exports ORDER BY job_id')), \
+               tuple(tuple(row) for row in store._connection.execute('SELECT * FROM sessions ORDER BY boot_id'))
+
+    def test_capacity_precheck_preserves_full_completed_history_outputs_and_prior_session(self):
+        store, records, paths = self.completed_prior(count=1)
+        before = self.history_rows(store)
+        prior = store.list_prior()
+        store.check_capacity()
+        self.assertEqual(self.history_rows(store), before)
+        self.assertEqual(store.list_prior(), prior)
+        self.assertEqual(store.lookup_output(records[0]['job_id']), paths[0])
+        self.assertEqual(paths[0].read_bytes(), b'finished-output')
+
+    def test_capacity_precheck_is_read_only_even_when_sqlite_disallows_writes(self):
+        store = self.store().open()
+        before = store._connection.total_changes
+        store._connection.execute('PRAGMA query_only=ON')
+        store.check_capacity()
+        self.assertEqual(store._connection.total_changes, before)
+        self.assertEqual(store.status()['state'], 'ready')
+
+    def test_failed_admission_after_capacity_precheck_preserves_retained_rows(self):
+        for failure in ('duplicate', 'malformed'):
+            with self.subTest(failure=failure):
+                store, records, paths = self.completed_prior(name=failure)
+                before = self.history_rows(store)
+                metadata = self.metadata(job_id=records[-1]['job_id']) if failure == 'duplicate' else self.metadata(filename='../bad.png')
+                store.check_capacity()
+                with self.assertRaises(HistoryConflict if failure == 'duplicate' else ValueError):
+                    store.admit(metadata)
+                self.assertEqual(self.history_rows(store), before)
+                self.assertEqual([store.lookup_output(record['job_id']) for record in records], paths)
+
+    def test_admission_prunes_only_required_rows_and_insert_failure_rolls_back_pruning(self):
+        store, records, paths = self.completed_prior()
+        before = self.history_rows(store)
+        store._connection.execute("CREATE TEMP TRIGGER reject_admission BEFORE INSERT ON exports BEGIN SELECT RAISE(ABORT, 'insertion failed'); END")
+        with self.assertRaises(HistoryUnavailable):
+            store.admit(self.metadata())
+        self.assertEqual(self.history_rows(store), before)
+        self.assertEqual([store.lookup_output(record['job_id']) for record in records], paths)
+        store.close()
+        store.open()
+        new_record = store.admit(self.metadata())
+        retained = {row[0] for row in store._connection.execute('SELECT job_id FROM exports')}
+        self.assertEqual(retained, {records[-1]['job_id'], new_record['job_id']})
+        self.assertIsNone(store.lookup_output(records[0]['job_id']))
+        self.assertEqual(store.lookup_output(records[-1]['job_id']), paths[-1])
+        self.assertTrue(all(path.is_file() for path in paths))
+
+    def test_capacity_precheck_rejects_full_unfinished_or_invalid_history_without_changes(self):
+        for invalid in (False, True):
+            with self.subTest(invalid=invalid):
+                store = self.store(f'full-{int(invalid)}', max_records=1).open()
+                store.admit(self.metadata())
+                if invalid:
+                    store._connection.execute("UPDATE exports SET record_json='invalid-json'")
+                    store._connection.commit()
+                before = self.history_rows(store)
+                with self.assertRaises(HistoryCapacityError):
+                    store.check_capacity()
+                self.assertEqual(self.history_rows(store), before)
+                self.assertEqual(store.invalid_records, int(invalid))
+
+    def test_capacity_precheck_rejects_disabled_closed_and_degraded_stores(self):
+        store = self.store().open()
+        store.mark_degraded()
+        with self.assertRaises(HistoryUnavailable):
+            store.check_capacity()
+        store.close()
+        with self.assertRaises(HistoryUnavailable):
+            store.check_capacity()
+        with self.assertRaises(HistoryUnavailable):
+            HistoryStore(self.root).check_capacity()
+
+    def test_capacity_precheck_read_failure_latches_degraded_without_removing_records(self):
+        store, _, _ = self.completed_prior(count=1)
+        before = self.history_rows(store)
+        with patch.object(store, '_records', side_effect=sqlite3.OperationalError('read failed')):
+            with self.assertRaises(HistoryUnavailable):
+                store.check_capacity()
+        self.assertEqual(store.status()['state'], 'degraded')
+        self.assertEqual(self.history_rows(store), before)
+
     def test_runtime_sqlite_write_failure_latches_degraded_and_allows_prior_reads(self):
         first = self.store().open()
         first.admit(self.metadata())

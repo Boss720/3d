@@ -15,6 +15,12 @@ class EditableJobQueue(queue.Queue):
         self.not_empty = threading.Condition(self.mutex)
         self.not_full = threading.Condition(self.mutex)
         self.all_tasks_done = threading.Condition(self.mutex)
+        self.paused = False
+
+    def set_paused(self, paused: bool) -> None:
+        with self.mutex:
+            self.paused = paused
+            self.not_empty.notify_all()
 
     def pending_ids(self) -> tuple:
         with self.mutex:

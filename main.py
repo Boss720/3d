@@ -33,6 +33,8 @@ from starlette.concurrency import run_in_threadpool
 from depth_engine import ModelManager
 from depth_engine import MODEL_SPECS
 from job_queue import EditableJobQueue
+from local_workspace import (storage_inventory, cleanup_temporary_files,
+                             validate_output_directory, open_folder, reveal_file)
 from job_history import HistoryStore, HistoryUnavailable, HistoryCapacityError, HistoryConflict
 from job_settings import SETTINGS_SCHEMA_VERSION, settings_snapshot, validate_settings
 from output_naming import (DEFAULT_OUTPUT_NAME_TEMPLATE, MAX_TEMPLATE_LENGTH, NAMING_FIELDS,
@@ -41,11 +43,11 @@ from preview_cache import PreviewDepthCache
 from preview_clip import ClipCancelled, prepare_preview_clip
 from preview_policy import (PREVIEW_UPLOAD_BYTES, PreviewPolicyError, preview_source_policy,
                             validate_preview_detail, validate_preview_upload_size)
-from preflight import inspect_media
+from preflight import inspect_media, video_metadata
 from telemetry import StageTimings
 from calibration import CalibrationStore, measure_inputs
 from resource_sampling import process_snapshot
-from stereo import TemporalDepthFilter, layout_size, refine_depth, render_output
+from stereo import StereoRenderer, TemporalDepthFilter, layout_size, refine_depth, render_output
 from video_encoder import select_encoder_profile
 from video_pipeline import PipelineCancelled, run_pipeline
 
@@ -69,7 +71,7 @@ VIDEO_EXTENSIONS = {
     ".ts", ".mts", ".m2ts", ".m4v",
 }
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-LAYOUTS = {"SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"}
+LAYOUTS = {"SBS", "XREAL_SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"}
 NEURAL_MODES = {"depth-anything-v2-small", "depth-anything-v2-base", "depth-anything-v2-large", "dpt-hybrid-midas"}
 DEPTH_MODES = {"balanced", "precision"} | NEURAL_MODES
 EXECUTION_MODES = {"auto", "cpu", "gpu", "hybrid"}
@@ -116,11 +118,12 @@ FFMPEG_PATH = find_ffmpeg()
 _SOURCE_COMPONENTS = ('main.py', 'depth_engine.py', 'stereo.py', 'video_encoder.py',
                       'video_pipeline.py', 'preview_cache.py', 'telemetry.py', 'preflight.py',
                       'calibration.py', 'resource_sampling.py', 'preview_policy.py', 'preview_clip.py',
-                      'job_queue.py', 'job_settings.py', 'output_naming.py', 'job_history.py')
+                      'job_queue.py', 'job_settings.py', 'output_naming.py', 'job_history.py', 'local_workspace.py')
 APP_BUILD_FINGERPRINT = (hashlib.sha256(b''.join((ROOT / name).read_bytes() for name in _SOURCE_COMPONENTS)).hexdigest()
                          if all((ROOT / name).is_file() for name in _SOURCE_COMPONENTS) else None)
 JOBS: dict[str, "Job"] = {}
 JOBS_LOCK = threading.RLock()
+STAGED_UPLOADS: set[Path] = set()
 JOB_QUEUE = EditableJobQueue()
 WORKER: threading.Thread | None = None
 WORKER_START_LOCK = threading.Lock()
@@ -178,6 +181,8 @@ class Job:
     output_name_template: str = DEFAULT_OUTPUT_NAME_TEMPLATE
     history_admitted: bool = False
     history_warning: str | None = None
+    cleanup_warning: str | None = None
+    cleanup_pending: dict[Path, str] = field(default_factory=dict, repr=False)
 
     def public(self, queue_position: int | None = None) -> dict[str, Any]:
         elapsed_seconds = None
@@ -262,6 +267,7 @@ class Job:
             "message": self.message,
             "error": self.error,
             "history_warning": self.history_warning,
+            "cleanup_warning": self.cleanup_warning,
             "output_name": self.output_path.name if self.output_path else None,
             "created_at": self.created_at,
             "depth_mode": self.depth_mode,
@@ -468,6 +474,23 @@ def stop_process(proc: subprocess.Popen[bytes] | None) -> None:
             pass
 
 
+def cleanup_job_file(job: Job, path: Path, label: str) -> None:
+    """Keep cleanup errors separate from the actual conversion outcome."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        with JOBS_LOCK:
+            job.cleanup_pending[path] = label
+            labels = ', '.join(sorted(set(job.cleanup_pending.values())))
+            job.cleanup_warning = (f'Temporary files could not be removed ({labels}) and remain on disk. '
+                                   'Close apps using them and check permissions in the local data folder.')
+    else:
+        with JOBS_LOCK:
+            job.cleanup_pending.pop(path, None)
+            if not job.cleanup_pending:
+                job.cleanup_warning = None
+
+
 def run_image(job: Job, net: cv2.dnn_Net | None) -> Path:
     with job.timings.measure("decode"):
         image = cv2.imread(str(job.input_path), cv2.IMREAD_COLOR)
@@ -501,18 +524,21 @@ def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) 
         raise RuntimeError("FFmpeg was not found. Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.")
     source = job.preview_source_path or job.input_path
     capture = cv2.VideoCapture(str(source))
+    try:
+        return run_video_capture(job, net, ffmpeg, source, capture, _force_software)
+    finally:
+        # Own the whole capture lifetime, including metadata and encoder setup.
+        capture.release()
+
+
+def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Path,
+                      capture, _force_software: bool) -> Path:
     if not capture.isOpened():
         raise RuntimeError("Could not open this video. The file may use an unsupported codec or be damaged.")
 
-    source_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    source_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-    total_frames = max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)))
-    set_job(job.id, total_frames=total_frames or None, frames_processed=0)
-    if source_width < 1 or source_height < 1:
-        capture.release()
-        raise RuntimeError("The video does not report a valid frame size.")
-    fps = ffprobe_fps(ffmpeg, source, source_fps if math.isfinite(source_fps) and source_fps > 0 else 30.0)
+    source_width, source_height, total_frames, source_fps, _ = video_metadata(capture)
+    set_job(job.id, total_frames=total_frames, frames_processed=0)
+    fps = ffprobe_fps(ffmpeg, source, source_fps)
 
     scale = min(1.0, 1920.0 / source_width, 1080.0 / source_height) if job.resolution == "1080p" else 1.0
     width = max(2, int(round(source_width * scale / 2.0) * 2))
@@ -560,9 +586,16 @@ def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) 
                     del stderr_lines[:20]
 
     reader = threading.Thread(target=drain_stderr, daemon=True)
-    reader.start()
     frame_index = 0
-    depth_filter = TemporalDepthFilter(job.temporal_smoothing)
+    try:
+        reader.start()
+        depth_filter = TemporalDepthFilter(job.temporal_smoothing)
+        renderer = StereoRenderer()
+    except Exception:
+        stop_process(proc)
+        if reader.is_alive():
+            reader.join(timeout=2)
+        raise
 
     def source_frames():
         try:
@@ -598,7 +631,7 @@ def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) 
             depth = refine_depth(frame, depth, job.edge_refinement)
             depth = depth_filter.apply(frame, depth)
         with job.timings.measure("render"):
-            output_frame = render_output(frame, depth, job.strength, job.convergence, job.layout)
+            output_frame = renderer.render(frame, depth, job.strength, job.convergence, job.layout)
         if job.cancel_event.is_set():
             raise JobCancelled()
         if proc.stdin is None:
@@ -653,7 +686,7 @@ def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) 
         if not target.is_file() or target.stat().st_size == 0:
             raise RuntimeError("FFmpeg finished without producing an output file.")
         set_job(job.id, frames_processed=frame_index,
-                total_frames=frame_index if total_frames > 0 else None)
+                total_frames=frame_index if total_frames is not None else None)
         return target
     except PipelineCancelled as exc:
         raise JobCancelled() from exc
@@ -686,8 +719,9 @@ def process_job(job_id: str) -> None:
         return
     if job.cancel_event.is_set():
         save_history_boundary(job, 'finish', 'canceled')
-        set_job(job_id, state="canceled", message="Canceled before processing")
-        job.input_path.unlink(missing_ok=True)
+        set_job(job_id, state="canceled", phase="canceled", message="Canceled before processing",
+                processing_finished_monotonic=time.monotonic())
+        cleanup_job_file(job, job.input_path, 'upload')
         return
 
     target = output_path_for(job)
@@ -750,7 +784,6 @@ def process_job(job_id: str) -> None:
             net = load_depth_model() if job.depth_mode == "precision" else None
         target = run_image(job, net) if job.media_type == "image" else run_video(job, net)
         if job.cancel_event.is_set():
-            target.unlink(missing_ok=True)
             raise JobCancelled()
         if (target != output_path_for(job) or target.is_symlink()
                 or target.parent.resolve() != OUTPUTS.resolve() or not target.is_file()
@@ -764,20 +797,20 @@ def process_job(job_id: str) -> None:
                 message="Processed clip ready" if job.purpose == 'preview_clip' else "Stereo export ready")
     except (JobCancelled, ClipCancelled):
         if target_owned:
-            target.unlink(missing_ok=True)
+            cleanup_job_file(job, target, 'partial output')
         save_history_boundary(job, 'finish', 'canceled')
         set_job(job_id, state="canceled", phase="canceled", process=None, processing_finished_monotonic=time.monotonic(), message="Conversion canceled")
     except Exception as exc:  # Surface local decoder/encoder/model errors in the queue.
         if target_owned:
-            target.unlink(missing_ok=True)
+            cleanup_job_file(job, target, 'partial output')
         # Bound persisted error text independently from the live diagnostic.
         error = re.sub(r'[\x00-\x1f\x7f]', ' ', str(exc))[:4096] or 'Conversion failed'
         save_history_boundary(job, 'finish', 'failed', error=error)
         set_job(job_id, state="failed", phase="failed", process=None, processing_finished_monotonic=time.monotonic(), error=str(exc), message="Conversion failed")
     finally:
         if job.preview_source_path:
-            job.preview_source_path.unlink(missing_ok=True)
-        job.input_path.unlink(missing_ok=True)
+            cleanup_job_file(job, job.preview_source_path, 'preview segment')
+        cleanup_job_file(job, job.input_path, 'upload')
         with JOBS_LOCK:
             current = JOBS.get(job_id)
             if current:
@@ -789,13 +822,28 @@ def worker_loop() -> None:
         # Share Queue's condition so shutdown can wake an idle worker without
         # consuming or moving any queued export.
         with JOB_QUEUE.not_empty:
-            while not JOB_QUEUE.qsize() and not WORKER_STOP.is_set():
+            while (not JOB_QUEUE.qsize() or JOB_QUEUE.paused) and not WORKER_STOP.is_set():
                 JOB_QUEUE.not_empty.wait()
             if WORKER_STOP.is_set():
                 return
             job_id = JOB_QUEUE.get_nowait()
         try:
             process_job(job_id)
+        except Exception as exc:
+            # A single unexpected job error must not strand the remaining queue.
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+            if job is not None:
+                stop_process(job.process)
+                if job.state not in {'completed', 'failed', 'canceled'}:
+                    error = re.sub(r'[\x00-\x1f\x7f]', ' ', str(exc))[:4096] or 'Conversion failed'
+                    save_history_boundary(job, 'finish', 'failed', error=error)
+                    set_job(job_id, state='failed', phase='failed', error=str(exc),
+                            processing_finished_monotonic=time.monotonic(), message='Conversion failed')
+                if job.preview_source_path:
+                    cleanup_job_file(job, job.preview_source_path, 'preview segment')
+                cleanup_job_file(job, job.input_path, 'upload')
+                set_job(job_id, process=None)
         finally:
             JOB_QUEUE.task_done()
 
@@ -860,6 +908,7 @@ async def application_lifespan(app):
     HISTORY, HISTORY_WARNING = store, None
     ACCEPTING_MUTATIONS = True
     WORKER_STOP.clear()
+    JOB_QUEUE.set_paused(False)  # Scheduling pause is local to this server launch.
     try:
         ensure_worker()
         yield
@@ -961,6 +1010,128 @@ def status() -> dict[str, Any]:
 @app.get('/api/diagnostics/resources')
 def resources() -> dict[str, Any]:
     return process_snapshot()
+
+
+def workspace_roots() -> dict[str, Path]:
+    return {'uploads': UPLOADS, 'previews': CLIP_PROXIES, 'outputs': OUTPUTS,
+            'models': MODELS}
+
+
+def protected_workspace_paths() -> set[Path]:
+    # Caller holds queue-before-jobs locks, including during deletion. Staged
+    # uploads are registered before creation and stay protected until admission.
+    protected = set(STAGED_UPLOADS)
+    pending = set(JOB_QUEUE.pending_ids())
+    for job in JOBS.values():
+        if job.state in {'queued', 'processing'} or job.id in pending:
+            protected.add(job.input_path)
+            protected.add(CLIP_PROXIES)  # Proxy creation can precede publication.
+            if job.preview_source_path:
+                protected.add(job.preview_source_path)
+    return protected
+
+
+@app.get('/api/storage')
+def get_storage() -> dict[str, Any]:
+    with JOB_QUEUE.lock, JOBS_LOCK:
+        roots, protected = workspace_roots(), protected_workspace_paths()
+    report = storage_inventory(roots, protected)
+    report['scope'] = 'Managed uploads, preview segments, outputs and models. RAM preview cache is excluded; no persistent depth cache is installed.'
+    return report
+
+
+@app.post('/api/storage/cleanup')
+def cleanup_storage(body: Any = Body(...)) -> dict[str, Any]:
+    if (type(body) is not dict or set(body) != {'paths'} or type(body['paths']) is not list
+            or len(body['paths']) > 1000 or any(type(path) is not str for path in body['paths'])):
+        raise HTTPException(status_code=400, detail='Select up to 1000 temporary file paths, without extra fields.')
+    with JOB_QUEUE.lock, JOBS_LOCK:
+        result = cleanup_temporary_files(body['paths'], workspace_roots(), protected_workspace_paths())
+        removed = set(result['deleted'])
+        for job in JOBS.values():
+            for path in tuple(job.cleanup_pending):
+                if str(path.absolute()) in removed:
+                    job.cleanup_pending.pop(path)
+            if not job.cleanup_pending:
+                job.cleanup_warning = None
+        return result
+
+
+@app.post('/api/jobs/{job_id}/cleanup')
+def retry_job_cleanup(job_id: str) -> dict[str, Any]:
+    with JOB_QUEUE.lock, JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail='Job not found.')
+        if job.state not in {'completed', 'failed', 'canceled'} or job_id in JOB_QUEUE.pending_ids():
+            raise HTTPException(status_code=409, detail='Wait for this job to finish before retrying cleanup.')
+        for path, label in tuple(job.cleanup_pending.items()):
+            # Only files already registered by this job's cleanup are retried.
+            cleanup_job_file(job, path, label)
+        return public_job_locked(job)
+
+
+@app.post('/api/output-folder/open')
+def open_output_folder() -> dict[str, bool]:
+    try:
+        open_folder(OUTPUTS)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {'ok': True}
+
+
+def completed_output(job_id: str) -> Path:
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        output = job.output_path if job and job.state == 'completed' else None
+    if output is None and HISTORY is not None and HISTORY.enabled:
+        try:
+            output = HISTORY.lookup_output(job_id)
+        except (ValueError, HistoryUnavailable):
+            output = None
+    if (output is None or output.is_symlink() or not output.is_file()
+            or output.resolve().parent != OUTPUTS.resolve()):
+        raise HTTPException(status_code=404, detail='Completed output was not found.')
+    return output
+
+
+@app.post('/api/jobs/{job_id}/reveal')
+def reveal_output(job_id: str) -> dict[str, bool]:
+    output = completed_output(job_id)
+    try:
+        reveal_file(output)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {'ok': True}
+
+
+@app.post('/api/jobs/{job_id}/copy')
+def copy_output(job_id: str, body: Any = Body(...)) -> dict[str, str]:
+    if (type(body) is not dict or set(body) != {'directory'}
+            or type(body['directory']) is not str or not body['directory'].strip()):
+        raise HTTPException(status_code=400, detail='Provide an existing destination directory.')
+    source = completed_output(job_id)
+    created = False
+    destination = None
+    try:
+        directory = validate_output_directory(body['directory'])
+        # Managed working folders cannot be copy destinations: cleanup and model
+        # ownership must remain unambiguous.
+        for root in (UPLOADS, CLIP_PROXIES, MODELS):
+            if directory == root.resolve() or root.resolve() in directory.parents:
+                raise ValueError('Choose a destination outside temporary and model folders.')
+        destination = directory / source.name
+        with source.open('rb') as reader, destination.open('xb') as writer:
+            created = True
+            shutil.copyfileobj(reader, writer, length=1024 * 1024)
+        return {'path': str(destination)}
+    except (OSError, ValueError) as exc:
+        if created and destination is not None:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                raise HTTPException(status_code=409, detail=f'Copy failed; a partial copy remains at {destination}.') from exc
+        raise HTTPException(status_code=409, detail=f'Could not save copy: {exc}') from exc
 
 
 @app.get("/api/models")
@@ -1276,78 +1447,88 @@ async def create_job(
 
     job_id = str(uuid.uuid4())
     input_path = UPLOADS / f"{job_id}{extension}"
-    total = 0
-    digest = hashlib.sha256()
-    staged_owned = False
+    with JOBS_LOCK:
+        STAGED_UPLOADS.add(input_path)
     try:
-        with input_path.open("xb") as target:
-            staged_owned = True
-            while chunk := await file.read(1024 * 1024):
-                total += len(chunk)
-                digest.update(chunk)
-                if total > MAX_UPLOAD_BYTES:
-                    target.close()
+        total = 0
+        digest = hashlib.sha256()
+        staged_owned = False
+        try:
+            with input_path.open("xb") as target:
+                staged_owned = True
+                while chunk := await file.read(1024 * 1024):
+                    total += len(chunk)
+                    digest.update(chunk)
+                    if total > MAX_UPLOAD_BYTES:
+                        target.close()
+                        input_path.unlink(missing_ok=True)
+                        raise HTTPException(status_code=413, detail="The media file is larger than 8 GB.")
+                    target.write(chunk)
+        except BaseException:
+            if staged_owned:
+                try:
                     input_path.unlink(missing_ok=True)
-                    raise HTTPException(status_code=413, detail="The media file is larger than 8 GB.")
-                target.write(chunk)
-    except Exception:
-        if staged_owned:
-            input_path.unlink(missing_ok=True)
-        raise
-    finally:
-        await file.close()
+                except OSError:
+                    pass  # Retain an inactive cleanup candidate without masking cancellation.
+            raise
+        finally:
+            await file.close()
 
-    media_type = "image" if extension in IMAGE_EXTENSIONS else "video"
-    job = Job(
-        id=job_id,
-        filename=filename,
-        input_path=input_path,
-        media_type=media_type,
-        layout=layout,
-        strength=strength,
-        convergence=convergence,
-        depth_mode=depth_mode,
-        input_size=input_size if input_size in {256, 384, 518} else 256,
-        resolution=resolution if resolution in {"source", "1080p"} else "source",
-        quality=quality if quality in {"fast", "balanced", "high"} else "balanced",
-        invert_depth=invert_depth,
-        temporal_smoothing=temporal_smoothing,
-        edge_refinement=edge_refinement,
-        execution_mode=execution_mode,
-        purpose=purpose,
-        clip_start_seconds=clip_start_seconds,
-        clip_duration_seconds=clip_duration_seconds,
-        output_name_template=output_name_template,
-    )
-    try:
+        media_type = "image" if extension in IMAGE_EXTENSIONS else "video"
+        job = Job(
+            id=job_id,
+            filename=filename,
+            input_path=input_path,
+            media_type=media_type,
+            layout=layout,
+            strength=strength,
+            convergence=convergence,
+            depth_mode=depth_mode,
+            input_size=input_size if input_size in {256, 384, 518} else 256,
+            resolution=resolution if resolution in {"source", "1080p"} else "source",
+            quality=quality if quality in {"fast", "balanced", "high"} else "balanced",
+            invert_depth=invert_depth,
+            temporal_smoothing=temporal_smoothing,
+            edge_refinement=edge_refinement,
+            execution_mode=execution_mode,
+            purpose=purpose,
+            clip_start_seconds=clip_start_seconds,
+            clip_duration_seconds=clip_duration_seconds,
+            output_name_template=output_name_template,
+        )
+        try:
+            with JOB_QUEUE.lock, JOBS_LOCK:
+                if not ACCEPTING_MUTATIONS:
+                    raise HTTPException(status_code=503, detail='StereoLab is shutting down.')
+                if purpose == 'export' and HISTORY is not None and HISTORY.enabled:
+                    HISTORY.admit(dict(job_id=job.id, created_at=job.created_at, filename=job.filename,
+                                       media_type=job.media_type, source_size_bytes=total,
+                                       source_sha256=digest.hexdigest(), settings=settings_snapshot(job),
+                                       output_name_template=job.output_name_template,
+                                       build_fingerprint=APP_BUILD_FINGERPRINT))
+                    job.history_admitted = True
+                JOBS[job_id] = job
+                JOB_QUEUE.put(job_id)
+        except HistoryCapacityError as exc:
+            input_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except HistoryUnavailable as exc:
+            input_path.unlink(missing_ok=True)
+            history_failure()
+            raise HTTPException(status_code=503, detail=HISTORY_WARNING) from exc
+        except ValueError as exc:
+            input_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            input_path.unlink(missing_ok=True)
+            raise
+        ensure_worker()
         with JOB_QUEUE.lock, JOBS_LOCK:
-            if not ACCEPTING_MUTATIONS:
-                raise HTTPException(status_code=503, detail='StereoLab is shutting down.')
-            if purpose == 'export' and HISTORY is not None and HISTORY.enabled:
-                HISTORY.admit(dict(job_id=job.id, created_at=job.created_at, filename=job.filename,
-                                   media_type=job.media_type, source_size_bytes=total,
-                                   source_sha256=digest.hexdigest(), settings=settings_snapshot(job),
-                                   output_name_template=job.output_name_template,
-                                   build_fingerprint=APP_BUILD_FINGERPRINT))
-                job.history_admitted = True
-            JOBS[job_id] = job
-            JOB_QUEUE.put(job_id)
-    except HistoryCapacityError as exc:
-        input_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
-    except HistoryUnavailable as exc:
-        input_path.unlink(missing_ok=True)
-        history_failure()
-        raise HTTPException(status_code=503, detail=HISTORY_WARNING) from exc
-    except ValueError as exc:
-        input_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception:
-        input_path.unlink(missing_ok=True)
-        raise
-    ensure_worker()
-    with JOB_QUEUE.lock, JOBS_LOCK:
-        return public_job_locked(job)
+            return public_job_locked(job)
+
+    finally:
+        with JOBS_LOCK:
+            STAGED_UPLOADS.discard(input_path)
 
 
 @app.get("/api/jobs")
@@ -1372,6 +1553,22 @@ def reorder_queue(body: Any = Body(...)) -> dict[str, Any]:
         except ValueError as exc:
             raise HTTPException(status_code=409, detail='The queue changed or work started. Refresh the queue and try again.') from exc
     return {'job_ids': order}
+
+
+@app.get('/api/queue/control')
+def queue_control() -> dict[str, Any]:
+    with JOB_QUEUE.lock, JOBS_LOCK:
+        return {'paused': JOB_QUEUE.paused, 'pending_count': len(pending_jobs_locked()),
+                'restart_behavior': 'running'}
+
+
+@app.post('/api/queue/control')
+def change_queue_control(body: Any = Body(...)) -> dict[str, Any]:
+    if type(body) is not dict or set(body) != {'paused'} or type(body['paused']) is not bool:
+        raise HTTPException(status_code=400, detail='Provide paused as a boolean without extra fields.')
+    with JOB_QUEUE.lock:
+        JOB_QUEUE.set_paused(body['paused'])
+        return queue_control()
 
 
 @app.post('/api/jobs/{job_id}/settings')
@@ -1438,6 +1635,14 @@ def cancel_job(job_id: str) -> dict[str, Any]:
         if job.state in {"completed", "failed", "canceled"}:
             return public_job_locked(job)
         job.cancel_event.set()
+        if JOB_QUEUE.paused and job_id in JOB_QUEUE.pending_ids():
+            # Paused scheduling must not defer cancellation/cleanup until resume.
+            JOB_QUEUE.remove_pending(job_id)
+            save_history_boundary(job, 'finish', 'canceled')
+            set_job(job_id, state='canceled', phase='canceled', message='Canceled while queue paused',
+                    processing_finished_monotonic=time.monotonic())
+            cleanup_job_file(job, job.input_path, 'upload')
+            return public_job_locked(job)
         proc = job.process
     stop_process(proc)
     set_job(job_id, message="Canceling local conversion")

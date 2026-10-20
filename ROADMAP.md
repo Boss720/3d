@@ -3,7 +3,9 @@
 Prepared 18 October 2026 against commit `0c08d1a`; reconciled through the
 Phase 4.1 integration, GPU consistency follow-up, and 20 October review of
 Phase 0.1 process-observation instrumentation committed as `d78b70c` and its
-subsequent live generated GPU gate.
+subsequent live generated GPU gate. Updated 20 October 2026 with the additional
+quality-of-life, feature and performance backlog below. Completed slices are
+recorded in the status table; remaining additions are planned.
 
 ## Execution status — 20 October 2026
 
@@ -16,7 +18,7 @@ finished. See PROGRESS.md and HANDOFF.md for dated commands, reports and limitat
 | 0.2 | Capability schema v1, conservative unknown memory, bounded cooldown, visible GPU retry, actual execution metadata | Broader adapter/device validation beyond local GTX and mocked policies |
 | 0.3 | Preflight decode/first frame, dimensions, codec inventory, writable output/disk budget; historical docs labeled | Full-stream corruption and export-time failures remain possible |
 | 1.1 | Bounded raw preview-depth LRU; presentation edits reuse depth; precise invalidation/reset | Continue real-media interaction validation |
-| 1.2 | DEPTH/RGB-D skip unused eye synthesis, with measured PNG-path gain and exact outputs | Other allocation/grid changes require profiles |
+| 1.2 | DEPTH/RGB-D skip unused eye synthesis. Job-owned video rendering grids/scratch buffers and direct XREAL canvas packing implemented; pixel parity, retained-frame independence and six real CPU exports checked | Two sets of three short matched CPU export pairs showed medians 2.300 to 2.088 and 2.074 to 1.942 seconds; individual pairs varied. Representative long/neural/GPU export measurements remain open |
 | 1.3 | Opt-in budgeted input-detail measurements, one warmup and two samples per candidate, explicit apply and bounded history | Model/encoder and complete-export calibration comparisons; no Auto policy change |
 | 1.4 | Recent-frame estimate/range, phased finalization, encoder-restart reason and deterministic tests | Comparable-history queue estimates remain deferred |
 | 2.1 | Motion-aligned history prototype and matched synthetic clips evaluated, not adopted | No consistent improvement demonstrated; raw-scale normalization remains unsolved |
@@ -25,6 +27,9 @@ finished. See PROGRESS.md and HANDOFF.md for dated commands, reports and limitat
 | 3.2 | Four exact performance presets, reset/dirty state, strict versioned JSON import/export | Broader accessibility and real-device validation |
 | 3.3 | Atomic pending-export reorder/remove/settings/naming, immutable snapshots, ready-file order/batch settings and names, source-aware retry/duplicate, per-file frozen readiness, tab-only notification opt-in and guarded keyboard shortcuts | Real browser/OS notification delivery and broader accessibility/device review; durable retry sources remain Phase 4 |
 | 4.1 | Opt-in metadata history integrated: worker/lease lifespan, streamed source hashes, durable admission/edits/lifecycle, prior-launch API/UI and downloads. Isolated Windows CPU restart, pending interruption, identical download bytes and second-owner rejection passed; settings reuse and narrow-width UI checked | Real symlink and POSIX execution proof; broader real-media/device validation. Project records, retained sources and actual recovery remain separate work |
+| 3.4 | Pause/resume between jobs, visible pending count, immediate cancellation while paused, shutdown wakeup and launch-local reset implemented; browser controls verified | Active-video pause and durable pause state are separate work |
+| 3.5 | Windows open-folder/reveal helpers and Save copy to an existing folder implemented; exclusive creation, partial-copy cleanup and original preservation tested. Browser copy verified byte-for-byte | Actual Explorer window behavior and packaged Windows validation remain open. Direct per-job conversion destinations require a history-format extension; current copies preserve managed originals and use extra space |
+| 3.6 | Managed usage by category, explicit inactive temporary-file selection and deletion, per-job cleanup retry, staged-upload/job protection and Windows lock handling implemented | Explicit output/model deletion and persistent depth-cache management remain future slices; junction rejection tested with stub, live symlink test unavailable without Windows privilege |
 | Delivery API review | Loopback Host validation and same-service browser write-origin checks, CLI access retained | This local boundary is not public deployment authentication |
 
 Quality prototypes are reproducible experiments outside the supported app path.
@@ -116,11 +121,20 @@ Cache a selected frame's inferred depth independently from stereo rendering. Str
 
 Profile buffer allocations, array copies, remap-grid construction, color conversion, resizing, and unused eye synthesis for DEPTH/RGBD output. Reuse shape-dependent buffers where ownership is safe. Keep queues bounded and preserve ordered temporal state.
 
+Next targets: job-owned reusable coordinate grids and rendering buffers in
+`make_eye_pair()`, followed by XREAL packing into a reusable combined canvas to
+avoid intermediate eye canvases and concatenation. Scope buffers to their owner
+and shape; queued frames must never alias memory that a later frame overwrites.
+
 **Acceptance:** an optimization is retained only with a repeatable end-to-end gain on an affected workload, no unexplained quality difference, and bounded memory. Confirm cancellation and ordering tests still pass.
 
 ### 1.3 Calibrate Auto mode and encoder choice — P1 / M
 
 Offer an opt-in short calibration on representative frames, with a visible time budget. Compare useful model/detail/encoder combinations rather than assuming GPU or NVENC always wins. Store results by hardware/runtime/model and invalidate them when dependencies change. Show which stage limits throughput and let users override recommendations.
+
+Extend the existing input-detail measurements with short complete exports that
+include decode, inference, rendering, encoding and finalization. Report calibration
+overhead and quality differences alongside recommendations.
 
 **Acceptance:** calibration includes its own overhead, never silently reduces output quality, and reports when there is insufficient evidence. Compare complete exports: encoder-only wins are not conversion wins.
 
@@ -130,11 +144,28 @@ Separate initialization, conversion and finalization. Use a smoothed recent thro
 
 **Acceptance:** deterministic timing tests cover warmup, stalls, fallback, encoder retry, unknown counts and completion. No negative times or fabricated precision. A retry clearly explains why progress or remaining time changed.
 
+Next slice: whole-queue ETA from comparable completed jobs, matching model,
+effective dimensions, device/provider, layout and encoder where available.
+Recompute after reorder, edits, cancellation or fallback; insufficient evidence or
+unknown duration must remain visibly unknown. A paused queue has no promised finish time.
+
 ### 1.5 Experimental adaptive depth sampling — P3 / L
 
 Investigate inferring fewer frames and propagating depth with motion compensation and confidence checks. Reset at cuts and re-infer on uncertain motion. Keep disabled by default until evaluation succeeds; simple repeated depth maps can introduce trails and incorrect moving edges.
 
 **Acceptance:** publish speed/quality comparisons on cuts, pans and fast objects. A speed gain without acceptable temporal output does not qualify for release as a recommended preset.
+
+### 1.6 Optional model-aware queue grouping — P2 / S–M
+
+Offer an explicit preview/apply action to group pending exports by model and
+compatible session settings, reducing repeated model initialization. Preserve the
+active job and immutable job settings; retain manual order unless the user applies
+the proposed order. Use existing atomic queue-edit contracts.
+
+**Acceptance:** measure session initialization and total mixed-model batch time;
+verify no jobs are lost or duplicated, paused state is respected, and the proposed
+order can be canceled before applying. Do not claim savings for an already warm,
+single-model batch.
 
 ## Phase 2 — Improve stereo quality
 
@@ -164,17 +195,73 @@ Provide original/depth/stereo views, A/B comparison, zoom/pan, synchronized crop
 
 **Acceptance:** A/B uses the same source frame; old responses cannot replace newer settings; clip preview exercises cut handling and motion. Test keyboard interaction and narrow layouts.
 
+Next slice: pin two settings configurations and compare their stereo results at
+the same timestamp, crop and zoom. Label each configuration and actual execution
+details; reuse valid depth when only presentation differs. Distinguish this from
+the existing Source/Depth comparison and Phase 5 model comparison.
+
 ### 3.2 Settings and presets — P1 / M
 
 Separate Basic and Advanced controls. Ship named Fast, Balanced and Quality starting points, plus a conservative 4 GB profile, with exact settings visible. Add per-setting speed/quality explanations, actual effective input size, reset-to-preset, unsaved-change indicators, and user preset import/export with schema validation.
 
 **Acceptance:** presets round-trip; invalid or obsolete fields are handled explicitly; users can see when hardware caps alter requested settings. Avoid unexplained star ratings or invented speed multipliers.
 
+Next slice: a persistent named user-preset library with favorites, rename/delete,
+and examples such as “XREAL films” and “Fast animation.” Preserve exact settings,
+schema validation and the existing modified-from-preset indicator; handle duplicate
+names, unavailable models and failed local persistence explicitly.
+
 ### 3.3 Queue and quality of life — P1 / M
 
 Add reorder/remove queued items, retry failed jobs, duplicate with changed settings, per-job settings snapshots, batch apply, and output naming templates with collision protection. Make active device, encoder, stage and fallback reason readable without expanding technical logs. Add completion notification opt-in, keyboard shortcuts, accessible focus/labels and non-color status cues.
 
 **Acceptance:** queued edits never mutate an active job; retries preserve source/settings and use distinct output paths; selection survives refresh; cancel remains reachable on narrow screens. Clarify browser download versus opening a local output folder, which may require a desktop helper.
+
+### 3.4 Pause queue between jobs — P1 / S
+
+Add “Pause after current job” and “Resume queue.” An active export finishes normally;
+no next job starts while paused, including jobs admitted during the pause. With no
+active job, pause takes effect immediately. Show paused state and pending count.
+This is queue scheduling; active-video pause and restart recovery are separate work.
+
+**Acceptance:** pause/dequeue races, repeated requests, cancellation, empty queues
+and shutdown are tested. Define restart behavior explicitly and keep cancellation
+available while paused. Resume preserves the pending order.
+
+### 3.5 Output destination and folder actions — P1 / S–M
+
+Allow choosing a writable output destination and provide “Open output folder” and
+“Reveal file” for completed exports. Freeze the destination per admitted job and
+retain collision protection and history/download lookup. Use a bounded local
+desktop integration for native actions; explain browser-download behavior when
+native integration is unavailable.
+
+**Acceptance:** invalid/unwritable destinations fail before conversion; existing
+files are never overwritten silently; missing/moved outputs have useful errors.
+Native actions resolve only validated destinations or known job outputs, with no
+arbitrary shell command execution. Test packaged Windows behavior.
+
+### 3.6 Storage usage and cleanup controls — P1 / M
+
+Show separate usage for uploads, outputs, models and depth caches, with a clear
+scope for each measurement. Add retry for failed temporary-file cleanup and
+selection-based removal of eligible temporary files. Preview affected files and
+space before deletion; completed outputs and installed models require explicit
+selection. Protect active jobs, referenced sources and files outside managed roots.
+
+**Acceptance:** Windows file locks remain nonfatal and retryable; partial cleanup
+reports what remains. Test active-job races, symlinks/reparse points and path
+containment. Reconcile deleted outputs with history without marking them downloadable.
+
+### 3.7 Selected-range exports — P2 / M
+
+Add start/end selection and export of a video range beyond the current short
+processed-preview limits. Freeze range settings with the job, show estimated work,
+and preserve audio synchronization and source timing within documented limits.
+
+**Acceptance:** validate empty/out-of-bounds ranges and boundaries near the end;
+verify decoded frames, duration, audio alignment and cancellation. Range exports
+must not be silently constrained by preview proxy limits.
 
 ## Phase 4 — Preserve work and avoid repeated inference
 
@@ -184,11 +271,22 @@ Persist job metadata and validated settings, with a versioned project format and
 
 **Acceptance:** crash/restart cannot mark partial output complete; missing/changed sources are identified; output paths cannot escape intended destinations. Test migration and corrupted state recovery.
 
+Next slice: save/reopen a project containing source references/fingerprints,
+settings, selected preview timestamp and pending queue order. Provide “Locate
+missing source” with identity checks. Make source retention/copying an explicit
+choice with storage estimates. Metadata history alone is not a reusable project;
+reopening a project must not silently launch exports or imply interrupted-job resume.
+
 ### 4.2 Optional reusable depth cache — P2 / L
 
 Store depth separately from presentation so users can render multiple layouts or stereo strengths without repeating inference. Define precision, normalization metadata, frame timestamps, compression, cache version and invalidation rules. Include storage estimates, a quota and explicit cleanup controls.
 
 **Acceptance:** rerender avoids inference; stale or partial caches are rejected; cached output is compared with uncached output. Quantify disk cost before enabling by default. Cache keys must include temporal/preprocessing choices appropriate to the stored stage.
+
+Prioritize repeated video tuning across strength, convergence and layout changes.
+Build this alongside saved projects, with atomic cache completion, a bounded disk
+quota, hit/miss visibility and cleanup integration (3.6). Compare total first-export
+and rerender costs, including cache writes/reads, before recommending defaults.
 
 ### 4.3 Chunked recovery — P2 / L
 
@@ -231,12 +329,26 @@ Quality evaluation should combine synthetic geometry tests, matched visual compa
 
 For a release candidate, verify long conversion, queue operations, cancellation, model failure, encoder fallback, restart behavior, audio/timing, accessible UI, and output playback. Bound in-memory queues and cache sizes. Keep the service local by default; include request-origin/upload/path handling in API reviews and never put media or personal paths into diagnostics without explicit user action.
 
-## Recommended first implementation batch
+## Recommended next implementation batches — 20 October 2026
 
-1. Add stage timings and reproducible benchmark output (0.1).
-2. Replace policy-string checks; implement conservative unknown-memory handling and a visible GPU retry action (0.2).
-3. Cache preview depth so strength/convergence/layout adjustments avoid inference (1.1).
-4. Add phased ETA and clear fallback/retry status (1.4).
-5. Build quality fixtures and compare the current renderer/filter before choosing the next quality algorithm (2.1–2.2).
+The original first batch has substantial completed slices recorded above. Continue
+its remaining real-media and reliability acceptance alongside these additions.
 
-This batch makes subsequent speed and quality decisions measurable while improving the frequent preview-and-adjust workflow. Start the larger UI and persistence work after these contracts settle. Reprioritize from observed bottlenecks and the user's most common footage rather than committing to speculative speedup percentages.
+1. **Daily workflow and measured rendering gains:** first slices delivered for queue
+   pause (3.4), folder/reveal actions and destination copies (3.5), temporary storage
+   cleanup (3.6), and reusable rendering grids/XREAL packing (1.2). Remaining:
+   packaged native-action checks, direct per-job destinations with durable lookup,
+   output/model deletion controls, and representative long/neural performance runs.
+2. **Reusable tuning work:** saved projects (4.1) and persistent video-depth caching
+   (4.2), with source identity, storage quotas and cleanup designed together.
+3. **Better decisions and convenience:** named/favorite presets (3.2), selected-range
+   exports (3.7), same-frame settings A/B (3.1), complete-export calibration (1.3),
+   whole-queue ETA (1.4), and optional model-aware grouping (1.6).
+4. **Larger editing and recovery features:** scene-specific strength/convergence
+   keyframes and higher-precision depth export (Phase 5), followed by validated
+   chunked recovery for long conversions (4.3).
+
+Adaptive frame sampling (1.5) and alternate GPU backends (Phase 6) remain separate,
+disabled-by-default experiments until hardware, quality and end-to-end performance
+gates pass. Rank optimizations using measured stage bottlenecks; no percentage
+speedup is promised before matched measurements on representative footage.
