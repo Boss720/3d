@@ -59,7 +59,7 @@ MODEL_SPECS = {
         "sha256": "dab40f67d5ead5e0ed52acfae41a717a708b02bc57f6cb761c5de828f26a7289",
         "size": 388917010, "license": "CC-BY-NC-4.0 (non-commercial)", "recommended": False,
         "upstream": "depth-anything/Depth-Anything-V2-Base",
-        "description": "Higher memory use on CPU or DirectML GPU; automatic CPU fallback if GPU fails. Non-commercial weights.",
+        "description": "Higher memory use on CPU or DirectML GPU. Auto can fall back to CPU if GPU inference fails; GPU + CPU and NVIDIA GPU modes report the failure. Non-commercial weights.",
     },
     "depth-anything-v2-large": {
         "name": "Depth Anything V2 Large", "repo": "onnx-community/depth-anything-v2-large",
@@ -67,7 +67,7 @@ MODEL_SPECS = {
         "sha256": "a93aa89b5e92e30e0afbe0f7c3ec692b35cfca791ae9004a190fb0ca2010e905",
         "size": 1336922232, "license": "CC-BY-NC-4.0 (non-commercial)", "recommended": False,
         "upstream": "depth-anything/Depth-Anything-V2-Large",
-        "description": "About 1.34 GB download; high memory use. DirectML is attempted on 4 GB GPUs with a reduced input cap; Auto/Hybrid can fall back to CPU. Non-commercial weights.",
+        "description": "About 1.34 GB download; high memory use. DirectML is attempted on 4 GB GPUs with a reduced input cap; only Auto falls back to CPU after an inference failure. Non-commercial weights.",
     },
     "dpt-hybrid-midas": {
         "name": "DPT Hybrid / MiDaS", "repo": "Xenova/dpt-hybrid-midas",
@@ -75,7 +75,7 @@ MODEL_SPECS = {
         "sha256": "2eca68239006c64af94bdfa68464f34d7627c3dca7bb02932636e616c55a39ff",
         "size": 533061339, "license": "Apache-2.0 (Intel upstream model)", "recommended": False,
         "upstream": "Intel/dpt-hybrid-midas",
-        "description": "MiDaS 3.0 DPT Hybrid; fixed 384 px input, CPU or DirectML GPU with automatic CPU fallback. Relative inverse depth.",
+        "description": "MiDaS 3.0 DPT Hybrid; fixed 384 px input, CPU or DirectML GPU. Only Auto falls back to CPU after a GPU inference failure. Relative inverse depth.",
     },
 }
 
@@ -139,7 +139,7 @@ class ModelManager:
                     'gpu_error': gpu_error, 'adapters': copy.deepcopy(hardware['adapters']),
                     'last_execution': last,
                     'capabilities': dict(RUNTIME_CAPABILITIES),
-                    'gpu_memory_policy': 'Best effort: all named models may try DirectML. Large is limited to a 518 px long side on adapters with 4 GB or less or unknown memory; Auto/Hybrid fall back to CPU after GPU failures and retry after 60 seconds or a manual reset. DirectML has no hard VRAM limit; CPU nodes may remain.'}
+                    'gpu_memory_policy': 'Best effort: all named models may try DirectML. Explicit GPU + CPU and NVIDIA GPU modes require the NVIDIA adapter and report GPU failures; Auto may fall back to CPU and retries after 60 seconds or a manual reset. Large is limited to a 518 px long side on adapters with 4 GB or less or unknown memory. DirectML has no hard VRAM limit; CPU nodes may remain.'}
         except Exception as exc:
             return {'available': False, 'providers': [], 'active_provider': last['active_provider'],
                     'device': last['device'], 'version': None, 'error': str(exc),
@@ -153,6 +153,18 @@ class ModelManager:
         with self._lock:
             return copy.deepcopy(self._last_execution)
 
+    @staticmethod
+    def _is_nvidia_adapter(adapter: dict[str, Any] | None) -> bool:
+        if not adapter:
+            return False
+        try:
+            vendor_id = int(adapter.get('vendor_id'))
+        except (TypeError, ValueError, OverflowError):
+            vendor_id = None
+        if vendor_id is not None:
+            return vendor_id == 0x10DE
+        return 'nvidia' in str(adapter.get('name', '')).lower()
+
     def _execution_plan(self, model_id: str, execution_mode: str, runtime: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
         if execution_mode not in EXECUTION_MODES:
             raise ValueError(f'Unknown execution mode: {execution_mode}. Choose auto, cpu, gpu or hybrid.')
@@ -160,10 +172,13 @@ class ModelManager:
             return CPU_PROVIDER, None, None
         adapter = runtime.get('gpu_device')
         reason = None
-        if not runtime.get('gpu_available') or adapter is None:
+        requires_nvidia = execution_mode in {'gpu', 'hybrid'}
+        if requires_nvidia and adapter is not None and not self._is_nvidia_adapter(adapter):
+            reason = f"NVIDIA GPU is required, but DirectML selected '{adapter.get('name', 'a non-NVIDIA adapter')}'."
+        elif not runtime.get('gpu_available') or adapter is None:
             reason = runtime.get('gpu_error') or 'GPU DirectML backend is unavailable; using CPU.'
         if reason:
-            if execution_mode == 'gpu':
+            if requires_nvidia:
                 raise RuntimeError(reason)
             return CPU_PROVIDER, None, reason
         return GPU_PROVIDER, adapter, None
@@ -451,7 +466,7 @@ class ModelManager:
             provider, adapter, reason = self._execution_plan(model_id, execution_mode, self.runtime_info())
             gpu_key = self._gpu_failure_key(model_id, adapter, input_size, frame_bgr)
             self._prune_gpu_failures()
-            if provider == GPU_PROVIDER and execution_mode != 'gpu' and gpu_key in self._gpu_failures:
+            if provider == GPU_PROVIDER and execution_mode == 'auto' and gpu_key in self._gpu_failures:
                 provider, adapter, reason = CPU_PROVIDER, None, self._gpu_failures[gpu_key][1]
             with self._lock:
                 self._last_execution = {'requested_mode': execution_mode, 'model_id': model_id,
@@ -477,7 +492,7 @@ class ModelManager:
                     self._session_id = None
                     with self._lock:
                         self._last_execution['fallback_reason'] = reason
-                    if execution_mode == 'gpu':
+                    if execution_mode in {'gpu', 'hybrid'}:
                         raise RuntimeError(reason) from exc
                     provider, adapter = CPU_PROVIDER, None
                     depth = self._run(frame_bgr, model_id, input_size, provider, adapter)

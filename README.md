@@ -58,22 +58,24 @@ Processing device choices:
 
 - **Auto** uses GPU depth if usable and overlaps the CPU video stages. If the GPU
   cannot run the model, it uses CPU depth and reports the reason.
-- **GPU + CPU / hybrid** explicitly requests the same cooperative video pipeline:
-  CPU decode/resize, GPU inference, then CPU refinement, temporal filtering, stereo
-  rendering and FFmpeg encoding. Two bounded queues preserve frame order.
-- **NVIDIA GPU** requires a usable GPU for depth and reports failures. The remaining
-  processing is CPU, sequential around inference. Unsupported ONNX operators may
-  still run on CPU within the GPU session.
-- **CPU only** uses CPU inference and sequential media processing.
+- **GPU + CPU / hybrid** requires the NVIDIA DirectML adapter for neural depth:
+  CPU decode/resize, NVIDIA inference, then CPU refinement, temporal filtering, stereo
+  rendering and FFmpeg encoding. Two bounded queues preserve frame order. GPU failures
+  are reported instead of silently switching neural inference to CPU.
+- **NVIDIA GPU** also requires the NVIDIA adapter and reports depth-inference failures.
+  The remaining processing is CPU, sequential around inference. Unsupported ONNX
+  operators may still run on CPU within the GPU session.
+- **CPU only** uses CPU for depth inference and media processing. Video encoding may
+  still use NVIDIA NVENC when the local FFmpeg check succeeds.
 
 Only one model/session is resident in each server, with a single inference call at
 a time. All built-in named models can attempt DirectML, including Large on a 4 GB
 card. GPU input dimensions are normally capped at 924 pixels on the longer side;
 Large is capped at 518 pixels on adapters with 4 GB or less to reduce its activation
 memory. Start Large at 256 px neural detail and close other GPU-heavy apps. VRAM use
-remains best effort because DirectML has no hard memory cap. Auto/Hybrid automatically
-retry on CPU if a GPU session or inference fails; explicit NVIDIA GPU mode reports
-the failure. Small remains the recommended 4 GB model for speed. Approximation and
+remains best effort because DirectML has no hard memory cap. Auto retries on CPU if a
+GPU session or inference fails; GPU + CPU and NVIDIA GPU modes report the failure.
+Small remains the recommended 4 GB model for speed. Approximation and
 custom ONNX remain CPU engines.
 
 The pipeline overlaps different stages, rather than running duplicate CPU/GPU
@@ -135,7 +137,7 @@ Media stays on the local server. Only model installation contacts Hugging Face. 
 |---|---:|---|---|
 | Depth Anything V2 Small | 99 MB | Apache-2.0 | CPU/DirectML GPU; recommended for 4 GB cards |
 | Depth Anything V2 Base | 389 MB | CC-BY-NC-4.0 | CPU/DirectML GPU; non-commercial weights |
-| Depth Anything V2 Large | 1.34 GB | CC-BY-NC-4.0 | DirectML attempted at 4 GB with 518 px cap; Auto/Hybrid can fall back to CPU |
+| Depth Anything V2 Large | 1.34 GB | CC-BY-NC-4.0 | DirectML attempted at 4 GB with 518 px cap; Auto can fall back to CPU |
 | DPT Hybrid / MiDaS | 533 MB | Apache-2.0, Intel upstream | CPU/DirectML GPU; 384 px inference |
 | Custom ONNX | Your file | Your model's license | OpenCV DNN CPU |
 | Visual approximation | None | App code | Image cues; **not neural AI depth** |
@@ -165,10 +167,10 @@ $env:VIDEO3D_FFMPEG = 'C:\Tools\ffmpeg\bin\ffmpeg.exe'
 
 GPU capabilities are versioned in `runtime.capabilities`; the frontend does not
 infer support from prose. Unknown adapter memory follows the conservative Large
-518 px cap. After a failed GPU attempt, Auto/Hybrid suppress repeated attempts for
+518 px cap. After a failed GPU attempt, Auto suppresses repeated attempts for
 the same model, adapter and input settings for 60 seconds. **Retry GPU** clears that
-suppression and the preview cache after any active inference finishes. GPU-only
-mode continues to report failures strictly. Actual model dimensions, input cap,
+suppression and the preview cache after any active inference finishes. GPU + CPU and
+NVIDIA GPU modes report failures strictly. Actual model dimensions, input cap,
 provider and successful inference are reported separately.
 
 Preview depth uses a process-local LRU with at most eight entries and 32 MiB of
@@ -193,9 +195,12 @@ must not be added to obtain elapsed wall time. Queue waits include operation ove
 
 **Performance presets** provide Fast, Balanced, Quality and Conservative 4 GB
 starting settings, with the exact values visible. Reset restores the selected
-preset; edits show an unsaved indicator. Export/import settings uses schema v1 JSON
-and rejects unknown fields, obsolete schemas and invalid values before applying.
-The 4 GB preset is a conservative starting point, not a memory guarantee.
+preset; edits show an unsaved indicator.
+The **Saved settings** panel stores up to 20 named configurations in this browser;
+mark favorites to show them first. Applying one changes the visible controls only
+and does not start a job. Export/import settings uses schema v1 JSON and rejects
+unknown fields, obsolete schemas and invalid values before applying. The 4 GB
+preset is a conservative starting point, not a memory guarantee.
 
 **Measure input detail** is opt-in for named Depth Anything models. Choose a 5,
 15 or 30 second budget. It warms each input size, collects two comparable samples,
@@ -416,3 +421,16 @@ into one combined canvas. Matched outputs are unchanged. Three short CPU-only
 approximation/XREAL export pairs showed a local median of 2.300 versus 2.088 seconds;
 this is not a promised gain for other footage or GPU inference. See
 [measurement scope and raw evidence](output/reviews/render-optimization-2026-10-20.md).
+
+### Saved projects
+
+Use **Save project** to download a portable `.stereolab-project.json` containing the
+ready queue order, frozen per-source settings, output naming and selected video
+preview time. The file stores each source's basename, media type, size and SHA-256
+fingerprint; it does not contain media bytes or absolute paths. Saving reads each
+source in bounded chunks in a background worker. **Open project** appends unresolved
+source rows without starting work. Use **Locate source** to choose each original;
+StereoLab verifies its full content before making it ready. The server checks the
+fingerprint again while staging the upload, so changed content is rejected before
+queue admission. Keep the original media separately; projects do not copy or retain
+source files, and persistent video-depth caching remains planned.

@@ -130,7 +130,8 @@ class WorkspaceApiTests(unittest.TestCase):
             result=asyncio.run(main.create_job(file=Upload(),layout='SBS',strength=5,convergence=.5,
                 depth_mode='balanced',input_size=256,resolution='source',quality='fast',invert_depth=False,
                 temporal_smoothing=.35,edge_refinement=True,execution_mode='cpu',purpose='export',
-                clip_start_seconds=0,clip_duration_seconds=3,output_name_template='{name}_{layout}',request=None))
+                clip_start_seconds=0,clip_duration_seconds=3,output_name_template='{name}_{layout}',
+                expected_source_sha256=None,request=None))
         self.assertEqual(result['state'],'queued')
         self.assertFalse(main.STAGED_UPLOADS)
 
@@ -149,7 +150,8 @@ class WorkspaceApiTests(unittest.TestCase):
                 asyncio.run(main.create_job(file=Upload(),layout='SBS',strength=5,convergence=.5,
                     depth_mode='balanced',input_size=256,resolution='source',quality='fast',invert_depth=False,
                     temporal_smoothing=.35,edge_refinement=True,execution_mode='cpu',purpose='export',
-                    clip_start_seconds=0,clip_duration_seconds=3,output_name_template='{name}_{layout}',request=None))
+                    clip_start_seconds=0,clip_duration_seconds=3,output_name_template='{name}_{layout}',
+                    expected_source_sha256=None,request=None))
         self.assertFalse(main.STAGED_UPLOADS)
         self.assertEqual(len(main.get_storage()['candidates']),1)
 

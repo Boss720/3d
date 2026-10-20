@@ -478,20 +478,24 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(providers, ['DmlExecutionProvider', 'CPUExecutionProvider', 'DmlExecutionProvider'])
         self.assertEqual(self.manager.execution_info()['active_provider'], 'DmlExecutionProvider')
 
-    def test_gpu_failure_auto_falls_back_and_is_not_retried_per_frame(self):
+    def test_gpu_failure_auto_falls_back_but_strict_modes_report_it(self):
         self.accepted(SMALL)
         def create(path, **options):
             if options.get('provider') == 'DmlExecutionProvider':
                 raise RuntimeError('DML out of memory')
             return FakeSession()
         with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), patch.object(self.manager, '_new_session', side_effect=create) as created:
-            for mode in ['auto', 'hybrid']:
-                self.manager.predict(np.zeros((8, 8, 3), np.uint8), SMALL, execution_mode=mode)
-                self.assertEqual(self.manager.execution_info()['active_provider'], 'CPUExecutionProvider')
-                self.assertIn('out of memory', self.manager.execution_info()['fallback_reason'])
+            frame = np.zeros((8, 8, 3), np.uint8)
+            self.manager.predict(frame, SMALL, execution_mode='auto')
+            self.assertEqual(self.manager.execution_info()['active_provider'], 'CPUExecutionProvider')
+            self.assertIn('out of memory', self.manager.execution_info()['fallback_reason'])
             self.assertEqual(created.call_count, 2)
-            with self.assertRaisesRegex(RuntimeError, 'out of memory'):
-                self.manager.predict(np.zeros((8, 8, 3), np.uint8), SMALL, execution_mode='gpu')
+            for mode in ('hybrid', 'gpu'):
+                with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'out of memory'):
+                    self.manager.predict(frame, SMALL, execution_mode=mode)
+                self.assertEqual(self.manager.execution_info()['active_provider'], None)
+                self.assertIn('out of memory', self.manager.execution_info()['error'])
+            self.assertEqual(created.call_count, 4)
 
     def test_silently_fallen_back_session_is_not_gpu_success(self):
         self.accepted(SMALL)

@@ -29,6 +29,12 @@ const frontendContract = (() => {
     const adapters = Array.isArray(runtime?.adapters) ? runtime.adapters : [];
     return adapters.find((adapter) => adapter?.selected === true || adapter?.is_selected === true) || (adapters.length === 1 ? adapters[0] : null);
   }
+  function nvidiaGpuAvailable(runtime) {
+    const adapter = selectedGpuAdapter(runtime);
+    if (!runtime?.gpu_available || !adapter) return false;
+    const vendorId = Number(adapter.vendor_id);
+    return Number.isFinite(vendorId) ? vendorId === 0x10de : /nvidia/i.test(String(adapter.name || runtime.gpu_name || ""));
+  }
   function retrySupported(runtime) {
     return capabilityV1(runtime) && runtime.capabilities.gpu_retry_supported === true;
   }
@@ -42,10 +48,11 @@ const frontendContract = (() => {
       try { settings = effectiveQueueSettings(item, currentSettings); }
       catch (error) { return `${item?.name || "A ready file"}: its effective settings are invalid (${error.message})`; }
       const mode = settings.depth_mode;
-      if (settings.execution_mode === "gpu") {
-        if (mode === "balanced" || mode === "precision") return `${item?.name || "A ready file"}: GPU-only execution is unavailable for this depth engine.`;
+      if (settings.execution_mode === "gpu" || settings.execution_mode === "hybrid") {
+        if (mode === "balanced" || mode === "precision") return `${item?.name || "A ready file"}: GPU + CPU and NVIDIA GPU modes require a named neural model.`;
         if (!runtime) return `${item?.name || "A ready file"}: checking NVIDIA GPU support…`;
-        if (!runtime.gpu_available) return `${item?.name || "A ready file"}: GPU was requested but no supported NVIDIA GPU is available. ${runtime.error || "Choose Auto, Hybrid, or CPU, or configure the GPU runtime."}`;
+        if (!runtime.gpu_available) return `${item?.name || "A ready file"}: DirectML is unavailable. Run .\\setup-gpu.ps1 and restart with .\\run.ps1, or choose Auto or CPU.`;
+        if (!nvidiaGpuAvailable(runtime)) return `${item?.name || "A ready file"}: NVIDIA GPU mode requires an NVIDIA DirectML adapter, but the selected adapter is ${selectedGpuAdapter(runtime)?.name || "not NVIDIA"}.`;
         if (mode === "depth-anything-v2-large" && !capabilityV1(runtime)) return `${item?.name || "A ready file"}: ${gpuPolicy(runtime, selectedGpuAdapter(runtime), mode).message || "This server does not report GPU capability schema v1. Upgrade StereoLab to enable Large GPU inference safely."}`;
       }
       if (mode === "balanced") continue;
@@ -543,7 +550,7 @@ const frontendContract = (() => {
     const png = (value) => typeof value === "string" && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value);
     return Boolean(result && png(result.source) && png(result.depth));
   }
-  return Object.freeze({ capabilityV1, gpuPolicy, selectedGpuAdapter, retrySupported, retryGpu, effectiveQueueSettings, queueReadiness, fullStillEligibility, validatePreviewResponse, previewDimensionDetails, processedClipCapability, validProcessedClipDuration, processedClipUnavailableMessage, processedClipErrorAfterPoll, validatePreviewClipJob, isOrdinaryExportJob, completionNotificationStatus, observeCompletionNotice, keyboardShortcutAction, clipContextMatches, processedClipResponseAction, processedClipQuarantineAfterPoll, queueCapabilities, historyCapability, validateHistoryItem, validateHistoryPage, historyStateLabel, outputNamingCapability, validateOutputNameTemplate, validateOutputBasename, validateQueueJobNaming, validateQueueJobSnapshot, moveReadyQueueItem, moveQueuedExportIds, makeReadyQueueCopy, freezeReadyQueueItem, outputNameTemplateForSubmit, outputNameTemplateForSubmission, canSnapshotOutputNameTemplate, outputNameTemplateForQueueCopy, queuedNameUpdateRequest, queuePhaseLabel, previewClipDetails, previewExecutionDetails, preflightDetails, jobEtaLabel, performancePreset, validateSettings, validateUserPreset, exportUserPreset, hasUnsavedSettings, validateCalibrationReport, calibrationApplicable, calibrationDetails, calibrationStatusLabel, calibrationContextMatches, zoomPanGeometry, compareSplitPercent, sourceDepthCompareAvailable });
+  return Object.freeze({ capabilityV1, gpuPolicy, selectedGpuAdapter, nvidiaGpuAvailable, retrySupported, retryGpu, effectiveQueueSettings, queueReadiness, fullStillEligibility, validatePreviewResponse, previewDimensionDetails, processedClipCapability, validProcessedClipDuration, processedClipUnavailableMessage, processedClipErrorAfterPoll, validatePreviewClipJob, isOrdinaryExportJob, completionNotificationStatus, observeCompletionNotice, keyboardShortcutAction, clipContextMatches, processedClipResponseAction, processedClipQuarantineAfterPoll, queueCapabilities, historyCapability, validateHistoryItem, validateHistoryPage, historyStateLabel, outputNamingCapability, validateOutputNameTemplate, validateOutputBasename, validateQueueJobNaming, validateQueueJobSnapshot, moveReadyQueueItem, moveQueuedExportIds, makeReadyQueueCopy, freezeReadyQueueItem, outputNameTemplateForSubmit, outputNameTemplateForSubmission, canSnapshotOutputNameTemplate, outputNameTemplateForQueueCopy, queuedNameUpdateRequest, queuePhaseLabel, previewClipDetails, previewExecutionDetails, preflightDetails, jobEtaLabel, performancePreset, validateSettings, validateUserPreset, exportUserPreset, hasUnsavedSettings, validateCalibrationReport, calibrationApplicable, calibrationDetails, calibrationStatusLabel, calibrationContextMatches, zoomPanGeometry, compareSplitPercent, sourceDepthCompareAvailable });
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = frontendContract;
 if (typeof window !== "undefined") window.StereoLabFrontendContract = frontendContract;
@@ -552,8 +559,9 @@ if (typeof document !== "undefined") (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
   const ids = ["mediaInput","dropZone","browseButton","sourceVideo","sourceImage","processedImage","previewEmpty","previewStage","sourceName","previewState","generatePreview","layoutSelect","formatHint","previewModeLabel","presetSelect","depthMode","depthNote","installSelected","modelRow","modelInput","modelButton","modelState","modelSizeRow","modelSizeLabel","modelSize","midasSizeNote","strength","strengthValue","convergence","convergenceValue","temporalSmoothing","smoothingValue","edgeRefinement","invertDepth","resolution","quality","convertButton","convertCount","convertHint","queueRows","queueEmpty","queueCount","queueHeadingCount","clearQueueButton","applySettingsToReady","queueWorkflowStatus","outputNamingControls","outputNameTemplate","outputNameTemplateHelp","outputNamingStatus","historyPanel","historyStatus","historyRows","historyRefresh","historyMore","enginePill","engineText","toolDescription","toolPath","runtimeDescription","runtimeCommand","modelCards","refreshModels","toast","helpButton","aboutDialog","aboutDone","completionNotifications","completionNotificationStatus","shortcutHelp"];
-  ids.push("executionMode", "executionNote", "previewExecution", "retryGpu", "performancePreset", "performancePresetStatus", "performancePresetSummary", "resetPerformancePreset", "exportPreset", "importPresetButton", "importPresetFile", "calibrationBudget", "calibrateInput", "calibrationStatus", "calibrationReport", "calibrationSummary", "calibrationCandidates", "calibrationScope", "calibrationLimitations", "calibrationStorageWarning", "applyCalibration", "tabCompare", "previewMedia", "sourceDepthCompare", "compareSource", "compareDepth", "compareDivider", "compareControls", "compareSlider", "compareValue", "compareResolution", "zoomIn", "zoomOut", "zoomLabel", "resetZoom", "previewDetail", "previewDetailHint", "glassesPreview", "processedClipCapability", "processedClipDuration", "generateProcessedClip", "cancelProcessedClip", "processedClipStatus", "processedClipVideo");
+  ids.push("executionMode", "executionNote", "previewExecution", "retryGpu", "performancePreset", "performancePresetStatus", "performancePresetSummary", "resetPerformancePreset", "exportPreset", "importPresetButton", "importPresetFile", "savedPresetSelect", "savedPresetName", "savedPresetFavorite", "saveNamedPreset", "applyNamedPreset", "deleteNamedPreset", "savedPresetStatus", "calibrationBudget", "calibrateInput", "calibrationStatus", "calibrationReport", "calibrationSummary", "calibrationCandidates", "calibrationScope", "calibrationLimitations", "calibrationStorageWarning", "applyCalibration", "tabCompare", "previewMedia", "sourceDepthCompare", "compareSource", "compareDepth", "compareDivider", "compareControls", "compareSlider", "compareValue", "compareResolution", "zoomIn", "zoomOut", "zoomLabel", "resetZoom", "previewDetail", "previewDetailHint", "glassesPreview", "processedClipCapability", "processedClipDuration", "generateProcessedClip", "cancelProcessedClip", "processedClipStatus", "processedClipVideo");
   ids.push("pauseQueue", "queuePauseStatus", "openOutputFolder", "refreshStorage", "storageStatus", "storageUsage", "storageFiles", "deleteStorageFiles", "copyOutputDirectory");
+  ids.push("projectName", "saveProject", "openProject", "projectFileInput", "projectStatus");
   const ui = Object.fromEntries(ids.map((id) => [id, $(id)]));
   const imageExtensions = new Set(["jpg","jpeg","png","webp"]);
   const videoExtensions = new Set(["mp4","webm","mkv","mov","avi","wmv","flv","ts","mts","m2ts","m4v"]);
@@ -566,6 +574,10 @@ if (typeof document !== "undefined") (() => {
   };
   const presets = {cinema:{strength:5,convergence:.5,smoothing:.35,edges:true,invert:false},subtle:{strength:2.5,convergence:.5,smoothing:.5,edges:true,invert:false},action:{strength:8,convergence:.45,smoothing:.25,edges:true,invert:false}};
   let performanceBaseline = frontendContract.performancePreset("balanced"), importedPresetBaseline = false;
+  const namedPresetsKey = "stereolab.namedPresets.v1", namedPresetLimit = 20, namedPresetNameLimit = 40;
+  let namedPresets = [];
+  const PROJECT_SCHEMA_VERSION=1,PROJECT_MAX_BYTES=2*1024*1024,PROJECT_MAX_SOURCES=200,PROJECT_MAX_QUEUE_ENTRIES=500,PROJECT_MAX_SOURCE_BYTES=8*1024**3,PROJECT_MAX_TOTAL_BYTES=64*1024**3,PROJECT_PREVIEW_TIME_LIMIT=31*86400;
+  let projectBusy=false;
   let calibrationBusy = false, calibrationResult = null, calibrationResultContext = null, calibrationNotice = "";
   let items = [], selectedUid = null, previewUrl = null, previewFile = null, previewView = "original", previewResult = null;
   let previewRevision = 0, resultRevision = -1, previewBusy = false, sourceError = "", previewError = "";
@@ -666,17 +678,20 @@ if (typeof document !== "undefined") (() => {
   function largeOnLimitedGpu() { return ui.depthMode.value === "depth-anything-v2-large" && gpuPolicy().limited; }
   function largeGpuUpgradeRequired() { return ui.depthMode.value === "depth-anything-v2-large" && Boolean(runtime?.gpu_available) && !frontendContract.capabilityV1(runtime); }
   function gpuBlock() {
-    if (ui.executionMode.value !== "gpu") return "";
-    if (["balanced", "precision"].includes(ui.depthMode.value)) return "GPU inference requires a named neural model. Choose Auto or CPU only for visual approximation or custom ONNX.";
+    const mode = ui.executionMode.value;
+    if (mode !== "gpu" && mode !== "hybrid") return "";
+    if (["balanced", "precision"].includes(ui.depthMode.value)) return "GPU + CPU and NVIDIA GPU modes require a named neural model. Choose Auto or CPU for visual approximation or custom ONNX.";
     if (!runtime) return "Checking NVIDIA GPU support…";
-    if (!runtime.gpu_available) return "NVIDIA GPU is unavailable. Run .\\setup-gpu.ps1 to prepare the separate .venv-gpu environment, then start it with .\\run.ps1. Or choose Auto or CPU only.";
+    if (!runtime.gpu_available) return "DirectML is unavailable. Run .\\setup-gpu.ps1 to prepare the separate .venv-gpu environment, then start it with .\\run.ps1. Or choose Auto or CPU.";
+    if (!frontendContract.nvidiaGpuAvailable(runtime)) return `NVIDIA GPU mode requires an NVIDIA DirectML adapter, but the selected adapter is ${frontendContract.selectedGpuAdapter(runtime)?.name || "not NVIDIA"}.`;
     if (ui.depthMode.value === "depth-anything-v2-large" && !frontendContract.capabilityV1(runtime)) return gpuPolicy().message || "This server does not report GPU capability schema v1. Upgrade StereoLab to enable Large GPU inference safely.";
     return "";
   }
   function executionSummary(execution, pipeline) {
     if (!execution) return "";
     const provider = execution.active_provider;
-    const label = provider && /CUDA|Dml|Tensorrt/i.test(provider) ? "GPU depth + CPU processing" : provider === "CPUExecutionProvider" || execution.device === "cpu" ? "CPU processing" : provider ? `${provider} depth` : "Device use not reported";
+    const accelerator = typeof execution.device === "string" && !/^cpu$/i.test(execution.device) ? `${execution.device} · ` : "";
+    const label = provider && /CUDA|Dml|Tensorrt/i.test(provider) ? `${accelerator}GPU depth + CPU processing` : provider === "CPUExecutionProvider" || execution.device === "cpu" ? "CPU processing" : provider ? `${provider} depth` : "Device use not reported";
     return [label, execution.fallback_reason ? `CPU fallback: ${execution.fallback_reason}` : "", pipeline === "overlapped" ? "video stages overlapped" : ""].filter(Boolean).join(" · ");
   }
   function renderDeviceNote() {
@@ -685,17 +700,18 @@ if (typeof document !== "undefined") (() => {
     ui.executionNote.classList.toggle("device-warning", Boolean(blocked) || mode !== "cpu" && (largeOnLimitedGpu() || largeGpuUpgradeRequired() || runtime && !runtime.gpu_available));
     if (blocked) { ui.executionNote.textContent = blocked; return; }
     if (["balanced", "precision"].includes(ui.depthMode.value)) { ui.executionNote.textContent = ui.depthMode.value === "balanced" ? "Visual approximation uses CPU image cues. Choose a named neural depth engine to use GPU depth estimation." : "Custom ONNX models use CPU in this studio. Choose a named neural depth engine to use GPU depth estimation."; return; }
-    if (mode === "cpu") { ui.executionNote.textContent = "CPU depth estimation and media processing. GPU is not requested."; return; }
+    if (mode === "cpu") { ui.executionNote.textContent = "CPU depth estimation and media stages. Video may still use NVIDIA NVENC when available."; return; }
     if (!runtime) { ui.executionNote.textContent = "Checking local GPU support…"; return; }
     if (largeGpuUpgradeRequired()) { ui.executionNote.textContent = gpuPolicy().message; return; }
     if (largeOnLimitedGpu()) {
       const policy = gpuPolicy(), cap = policy.inputCap;
-      ui.executionNote.textContent = `Large will try DirectML on this ${policy.memoryUnknown ? "GPU with unknown memory, treated conservatively" : "limited-memory GPU"} with a ${cap} px long-side cap. Start at 256 px detail to reduce memory use. Auto/Hybrid fall back to CPU if GPU inference fails; GPU-only reports the error.`;
+      ui.executionNote.textContent = `Large will try DirectML on this ${policy.memoryUnknown ? "GPU with unknown memory, treated conservatively" : "limited-memory GPU"} with a ${cap} px long-side cap. Start at 256 px detail to reduce memory use. Auto can fall back to CPU if GPU inference fails; GPU + CPU and NVIDIA GPU modes report the error.`;
       return;
     }
     if (!runtime.gpu_available) { ui.executionNote.textContent = `CPU fallback: ${runtime.error || "no compatible GPU runtime and NVIDIA adapter detected"}. Optional GPU setup: .\\setup-gpu.ps1 (separate .venv-gpu), then .\\run.ps1.`; return; }
     const policy = gpuPolicy(), capNote = policy.supported ? ` Named-model input cap ${policy.inputCap} px.` : "";
-    ui.executionNote.textContent = `${runtime.gpu_name || "NVIDIA GPU"} available${runtime.gpu_verified ? " · inference verified" : " · inference not yet verified"}.${capNote} ${mode === "gpu" ? "GPU requested; failures will be reported." : "GPU depth with CPU media processing; CPU fallback if needed."}`;
+    const modeNote = mode === "gpu" ? "NVIDIA GPU required for depth; failures will be reported." : mode === "hybrid" ? "NVIDIA GPU required for depth; CPU handles media stages, and GPU failures will be reported." : "Auto prefers the selected GPU for depth and can fall back to CPU.";
+    ui.executionNote.textContent = `${runtime.gpu_name || "NVIDIA GPU"} available${runtime.gpu_verified ? " · inference verified" : " · inference not yet verified"}.${capNote} ${modeNote}`;
   }
   function readiness() {
     const blocked = gpuBlock();
@@ -890,6 +906,11 @@ if (typeof document !== "undefined") (() => {
     document.querySelectorAll("[data-view]").forEach((button) => { const active=button.dataset.view === view; button.classList.toggle("active",active); button.setAttribute("aria-selected",String(active)); button.tabIndex=active ? 0 : -1; });
     updatePreview();
   }
+  function restoreProjectPreviewTime(item,revision){
+    const seconds=Number(item.projectPreviewTimeSeconds);if(!item.file||item.mediaType!=="video"||!Number.isFinite(seconds)||seconds<0)return;
+    const restore=()=>{if(selectedUid!==item.uid||previewRevision!==revision||!previewFile)return;const duration=Number(ui.sourceVideo.duration);if(Number.isFinite(duration)&&duration>0&&seconds>=duration){projectStatus(`Saved preview time ${formatDuration(seconds)} is outside this source’s duration.`);return;}try{ui.sourceVideo.currentTime=seconds;updatePreview();}catch{projectStatus("The saved preview time could not be restored for this source.",true);}};
+    if(Number(ui.sourceVideo.readyState)>=1)restore();else ui.sourceVideo.addEventListener("loadedmetadata",restore,{once:true});
+  }
   function selectItem(item) {
     selectedUid = item.uid;
     invalidateProcessedClipIfStale("Source changed");
@@ -898,10 +919,11 @@ if (typeof document !== "undefined") (() => {
     previewUrl = null; previewFile = item.file || null; previewResult = null; sourceError = ""; previewError=""; previewRevision++;
     resetZoomPan();compareSplit=50;ui.compareSlider.value="50";updateCompareSplit();
     ui.sourceName.textContent = item.name;
-    if (previewFile) { previewUrl=URL.createObjectURL(previewFile); (isImage(previewFile) ? ui.sourceImage : ui.sourceVideo).src=previewUrl; }
+    if (previewFile) { previewUrl=URL.createObjectURL(previewFile); (isImage(previewFile) ? ui.sourceImage : ui.sourceVideo).src=previewUrl;restoreProjectPreviewTime(item,previewRevision); }
     setView("original"); updateQueue();
   }
   function addFiles(fileList) {
+    if(projectBusy)return;
     let rejected=0; const added=[];
     for (const file of Array.from(fileList || [])) {
       if (!isImage(file) && !videoExtensions.has(extension(file))) { rejected++; continue; }
@@ -912,17 +934,18 @@ if (typeof document !== "undefined") (() => {
     ui.mediaInput.value=""; updateQueue();
   }
   function removeItem(item) {
+    if(projectBusy)return;
     if (item.jobId) hiddenJobs.add(item.jobId);
     items=items.filter((x) => x.uid !== item.uid);
     if (selectedUid===item.uid) { selectedUid=null;invalidateProcessedClipIfStale("Source removed"); previewFile=null; previewResult=null; sourceError=""; previewError=""; resetZoomPan();compareSplit=50;ui.compareSlider.value="50";ui.sourceVideo.pause(); ui.sourceVideo.removeAttribute("src"); ui.sourceVideo.load(); ui.sourceImage.removeAttribute("src"); if(previewUrl)URL.revokeObjectURL(previewUrl); previewUrl=null; ui.sourceName.textContent="No media selected"; markPreviewStale(); }
   }
   function action(text, handler) { const button=el("button","row-button",text); button.type="button"; button.addEventListener("click",handler); return button; }
-  function queueAction(text, ariaLabel, key, handler, disabled=false) { const button=action(text,handler);button.setAttribute("aria-label",ariaLabel);button.dataset.actionKey=key;button.disabled=disabled||queueMutationBusy;return button; }
+  function queueAction(text, ariaLabel, key, handler, disabled=false) { const button=action(text,handler);button.setAttribute("aria-label",ariaLabel);button.dataset.actionKey=key;button.disabled=disabled||queueMutationBusy||projectBusy;return button; }
   function queueDisplayItems(){
-    const rank=(item)=>item.state==="processing"||item.state==="uploading"?0:item.state==="queued"?1:!item.jobId&&item.state==="ready"?2:3;
+    const rank=(item)=>item.state==="processing"||item.state==="uploading"?0:item.state==="queued"?1:!item.jobId&&(item.state==="ready"||item.projectSourceSha256)?2:3;
     return items.map((item,index)=>({item,index})).sort((a,b)=>rank(a.item)-rank(b.item)||(rank(a.item)===1?(a.item.queuePosition??Number.MAX_SAFE_INTEGER)-(b.item.queuePosition??Number.MAX_SAFE_INTEGER):0)||a.index-b.index).map(({item})=>item);
   }
-  function focusQueueItem(uid,key){setTimeout(()=>{const row=[...ui.queueRows.querySelectorAll(".queue-row")].find((node)=>node.dataset.itemUid===String(uid));const actions=row?[...row.querySelectorAll("[data-action-key]")]:[];const target=(row&&(actions.find((node)=>node.dataset.actionKey===key&&!node.disabled)||actions.find((node)=>!node.disabled)||row.querySelector(".file-name")))||ui.queueRows.querySelector(".file-name")||(!ui.applySettingsToReady.disabled?ui.applySettingsToReady:ui.clearQueueButton);target?.focus();},0);}
+  function focusQueueItem(uid,key){setTimeout(()=>{const row=[...ui.queueRows.querySelectorAll(".queue-row")].find((node)=>node.dataset.itemUid===String(uid));const focusables=row?[...row.querySelectorAll("[data-action-key], [data-focus-key]")]:[];const target=(row&&(focusables.find((node)=>(node.dataset.actionKey===key||node.dataset.focusKey===key)&&!node.disabled)||focusables.find((node)=>!node.disabled)||row.querySelector(".file-name")))||ui.queueRows.querySelector(".file-name")||(!ui.applySettingsToReady.disabled?ui.applySettingsToReady:ui.clearQueueButton);target?.focus();},0);}
   function freezeReadyItem(item, settings=currentSettingsForPreset()){Object.assign(item,frontendContract.freezeReadyQueueItem(item,settings,namingCapability?currentOutputNameTemplate:"{name}_{layout}"));item.message=namingCapability?"Ready with frozen settings and name template":"Ready with frozen settings";}
   function moveLocalReady(item,direction){const key=`move-ready-${item.uid}-${direction}`;items=frontendContract.moveReadyQueueItem(items,item.uid,direction);queueWorkflowMessage=`Moved ${item.name} ${direction<0?"earlier":"later"} in the local ready-file order.`;updateQueue(item.uid,key);}
   function applySettingsToReady(){const ready=items.filter((item)=>!item.jobId&&item.state==="ready");if(!ready.length)return;if(!frontendContract.canSnapshotOutputNameTemplate(namingCapability,currentOutputNameTemplate)){toast("Fix the output name template before freezing ready files.",true);ui.outputNameTemplate.focus();return;}const snapshot=currentSettingsForPreset();ready.forEach((item)=>freezeReadyItem(item,snapshot));queueWorkflowMessage=namingCapability?`Applied and froze the current settings and name template for ${ready.length} ready file${ready.length===1?"":"s"}.`:`Applied and froze the current settings for ${ready.length} ready file${ready.length===1?"":"s"}.`;updateQueue();}
@@ -962,33 +985,34 @@ if (typeof document !== "undefined") (() => {
   async function removeQueuedItem(item,focusKey){
     if(!frontendContract.queueCapabilities(status)||queueMutationBusy)return;
     queueMutationBusy=true;queueWorkflowMessage=`Removing ${item.name} from the server queue…`;updateQueue(item.uid,focusKey);
-    try{await request(`/api/jobs/${encodeURIComponent(item.jobId)}/remove-queued`,{method:"POST"});hiddenJobs.add(item.jobId);saveHidden();items=items.filter((entry)=>entry!==item);queueWorkflowMessage=`Removed ${item.name} from the server queue.`;}
+    try{await request(`/api/jobs/${encodeURIComponent(item.jobId)}/remove-queued`,{method:"POST"});removeItem(item);saveHidden();queueWorkflowMessage=`Removed ${item.name} from the server queue.`;}
     catch(error){await queueMutationFailed(error,"Queued removal");}
     finally{queueMutationBusy=false;updateQueue(item.uid,focusKey);}
   }
   function updateQueue(focusUid=null,focusKey=null) {
-    if(!focusUid&&ui.queueRows.contains(document.activeElement)){const active=document.activeElement,row=active.closest(".queue-row");if(row){focusUid=row.dataset.itemUid;focusKey=active.dataset.actionKey||null;}}
-    const pending=items.filter((x)=>!x.jobId&&x.state==="ready"),block=frontendContract.queueReadiness(pending,currentSettingsForPreset(),{runtime,models,customModelAvailable,catalogError}),namingBlock=queueNamingBlock(pending),canFreezeName=frontendContract.canSnapshotOutputNameTemplate(namingCapability,currentOutputNameTemplate),caps=frontendContract.queueCapabilities(status);
+    const disclosureState=new Map([...ui.queueRows.querySelectorAll("details[data-disclosure-key]")].map((details)=>[details.dataset.disclosureKey,details.open]));
+    if(!focusUid&&ui.queueRows.contains(document.activeElement)){const active=document.activeElement,row=active.closest(".queue-row");if(row){focusUid=row.dataset.itemUid;focusKey=active.dataset.actionKey||active.dataset.focusKey||null;}}
+    const pending=items.filter((x)=>!x.jobId&&x.state==="ready"),projectSources=items.filter((x)=>!x.jobId&&((x.state==="ready"&&x.file)||(x.projectSourceSha256&&!x.file))),missingProjectSources=items.filter((x)=>!x.jobId&&x.projectSourceSha256&&!x.file),block=frontendContract.queueReadiness(pending,currentSettingsForPreset(),{runtime,models,customModelAvailable,catalogError}),namingBlock=queueNamingBlock(pending),canFreezeName=frontendContract.canSnapshotOutputNameTemplate(namingCapability,currentOutputNameTemplate),caps=frontendContract.queueCapabilities(status);
     const videoBlocked=status&&!status.ffmpeg_found&&pending.some((x)=>x.mediaType==="video");
     ui.outputNamingControls.hidden=!namingCapability;
     if(namingCapability){ui.outputNameTemplate.maxLength=namingCapability.max_template_length*2;try{frontendContract.validateOutputNameTemplate(currentOutputNameTemplate,namingCapability.max_template_length);ui.outputNameTemplate.removeAttribute("aria-invalid");ui.outputNamingStatus.textContent="Ready to name new exports. The unique job ID and file extension are added automatically.";}catch(error){ui.outputNameTemplate.setAttribute("aria-invalid","true");ui.outputNamingStatus.textContent=error.message;}}
     ui.queueCount.textContent=String(items.length);ui.queueHeadingCount.textContent=`(${items.length})`;ui.convertCount.textContent=String(pending.length);ui.queueEmpty.hidden=items.length>0;
-    ui.convertButton.disabled=!pending.length||submitting||Boolean(block)||Boolean(namingBlock)||Boolean(videoBlocked);ui.convertButton.firstElementChild.textContent=submitting?"Adding to local queue…":"✦ Convert queue";
+    ui.convertButton.disabled=!pending.length||submitting||projectBusy||Boolean(block)||Boolean(namingBlock)||Boolean(videoBlocked);ui.convertButton.firstElementChild.textContent=submitting?"Adding to local queue…":"✦ Convert queue";
     ui.convertHint.textContent=block||namingBlock||(videoBlocked?"FFmpeg is needed for the videos in your queue.":pending.length?`${pending.length} file${pending.length===1?"":"s"} ready. Unfrozen files use visible settings${namingCapability?" and the current name template":""} when submitted.`:"Add media to start a conversion.");
     ui.applySettingsToReady.textContent=namingCapability?"Apply settings + name to ready files":"Apply settings to ready files";
-    ui.applySettingsToReady.disabled=!pending.length||!canFreezeName;ui.queueWorkflowStatus.textContent=queueWorkflowMessage||(namingCapability?(caps?"Ready files use visible settings and the current name template at submit unless frozen. Server queue edits apply only to pending exports; clip slots stay in place.":"Ready files use visible settings and the current name template at submit unless frozen."):(caps?"Ready files use visible settings at submit unless frozen. Server queue edits apply only to pending exports; clip slots stay in place.":"Ready files use visible settings at submit unless frozen."));
+    ui.applySettingsToReady.disabled=!pending.length||!canFreezeName||projectBusy;ui.saveProject.disabled=projectBusy||projectSources.length===0;ui.openProject.disabled=projectBusy;ui.projectFileInput.disabled=projectBusy;ui.projectName.disabled=projectBusy;ui.browseButton.disabled=projectBusy;ui.clearQueueButton.disabled=projectBusy;ui.queueWorkflowStatus.textContent=queueWorkflowMessage||(missingProjectSources.length?`${missingProjectSources.length} saved-project source${missingProjectSources.length===1?" needs":"s need"} verification before conversion.`:(namingCapability?(caps?"Ready files use visible settings and the current name template at submit unless frozen. Server queue edits apply only to pending exports; clip slots stay in place.":"Ready files use visible settings and the current name template at submit unless frozen."):(caps?"Ready files use visible settings at submit unless frozen. Server queue edits apply only to pending exports; clip slots stay in place.":"Ready files use visible settings at submit unless frozen.")));
     ui.queueRows.replaceChildren();
     const queuedExports=eligibleQueuedExports(),displayItems=queueDisplayItems();
     for(const item of displayItems){
       const identity=String(item.uid||item.jobId),row=el("article",`queue-row${item.uid===selectedUid?" selected":""}`);row.dataset.itemUid=identity;
-      const icon=el("div","file-icon",item.mediaType==="image"?"▧":"▶"),copy=el("div","file-copy"),name=el("button","file-name",item.name);name.type="button";name.dataset.actionKey=`select-${identity}`;name.title=item.name;name.setAttribute("aria-label",`Select ${item.name}`);name.setAttribute("aria-pressed",String(item.uid===selectedUid));name.addEventListener("click",()=>selectItem(item));
+       const icon=el("div","file-icon",item.mediaType==="image"?"▧":"▶"),copy=el("div","file-copy"),name=el("button","file-name",item.name);name.type="button";name.disabled=projectBusy;name.dataset.actionKey=`select-${identity}`;name.title=item.name;name.setAttribute("aria-label",`Select ${item.name}`);name.setAttribute("aria-pressed",String(item.uid===selectedUid));name.addEventListener("click",()=>selectItem(item));
       const meta=el("div","file-meta"),state=el("span",`file-status ${item.state}`,item.message||({ready:"Ready to convert",uploading:"Uploading locally",completed:"Complete",failed:"Failed",canceled:"Canceled"}[item.state]||item.state));meta.append(state);
       const info=[formatBytes(item.file?.size||item.size),item.layout].filter(Boolean).join(" · ");if(info)meta.append(el("span","",info));copy.append(name,meta);
       const execution=executionSummary(item.execution,item.pipeline);if(execution)copy.append(el("div","queue-execution",execution));else if(item.executionMode)copy.append(el("div","queue-execution",`Requested: ${{auto:"Auto",hybrid:"GPU + CPU",gpu:"NVIDIA GPU",cpu:"CPU only"}[item.executionMode]||item.executionMode} · awaiting execution`));
       const runtimeDetails=progressDetails(item);if(runtimeDetails.length)copy.append(el("div","queue-runtime",runtimeDetails.join(" · ")));
       if(item.historyWarning)copy.append(el("small","queue-source-detail",`History warning: ${String(item.historyWarning).slice(0,240)}`));
       if(item.cleanupWarning)copy.append(el("small","queue-source-detail",`Cleanup warning: ${item.cleanupWarning}`));
-      const preflight=frontendContract.preflightDetails(item.preflight,formatBytes);if(preflight.summary){const budget=el("div","queue-preflight");budget.append(el("div","queue-preflight-summary",preflight.summary));if(preflight.visibleWarning)budget.append(el("small","queue-preflight-warning",preflight.visibleWarning));const extraWarnings=preflight.warnings.filter((warning)=>warning!==preflight.visibleWarning);if(preflight.basis||extraWarnings.length){const details=el("details","queue-preflight-details");details.append(el("summary","","Estimate details"));if(preflight.basis)details.append(el("small","queue-preflight-basis",`Estimate basis: ${preflight.basis}`));for(const warning of extraWarnings)details.append(el("small","queue-preflight-warning",warning));budget.append(details);}copy.append(budget);}
+      const preflight=frontendContract.preflightDetails(item.preflight,formatBytes);if(preflight.summary){const budget=el("div","queue-preflight");budget.append(el("div","queue-preflight-summary",preflight.summary));if(preflight.visibleWarning)budget.append(el("small","queue-preflight-warning",preflight.visibleWarning));const extraWarnings=preflight.warnings.filter((warning)=>warning!==preflight.visibleWarning);if(preflight.basis||extraWarnings.length){const details=el("details","queue-preflight-details");details.dataset.disclosureKey=`preflight-${identity}`;details.open=disclosureState.get(details.dataset.disclosureKey)??false;const summary=el("summary","","Estimate details");summary.dataset.focusKey=`${details.dataset.disclosureKey}-summary`;details.append(summary);if(preflight.basis)details.append(el("small","queue-preflight-basis",`Estimate basis: ${preflight.basis}`));for(const warning of extraWarnings)details.append(el("small","queue-preflight-warning",warning));budget.append(details);}copy.append(budget);}
       if(item.settingsSnapshot)copy.append(el("small","queue-settings-detail",`${item.jobId?"Server snapshot":item.settingsFrozen?"Frozen settings":"Unfrozen · uses current settings at submit"}: ${settingsDescription(item.settingsSnapshot)}`));
       else if(!item.jobId&&item.state==="ready")copy.append(el("small","queue-settings-detail","Unfrozen · uses the visible settings when you submit this file."));
       else if(item.jobId)copy.append(el("small","queue-settings-detail",item.settingsSnapshotError||"Settings snapshot unavailable; use a newer server for queue editing."));
@@ -999,11 +1023,13 @@ if (typeof document !== "undefined") (() => {
         else if(!item.jobId&&item.state==="ready")copy.append(el("small","queue-name-detail",`Unfrozen · uses current template at submit: ${currentOutputNameTemplate}`));
         else if(item.jobId)copy.append(el("small","queue-name-detail",item.namingSnapshotError||"Name template snapshot unavailable from this server."));
       }
-      if(item.jobId&&!item.file)copy.append(el("small","queue-source-detail",item.sourceAvailable===true?"Server has a readable working upload; this browser has no retry source file.":"Source is not retained for retry. Reselect the original file; filenames are not matched automatically."));
+       if(item.projectSourceSha256&&!item.file)copy.append(el("small","queue-source-detail project-source-missing","Saved project source is not linked. Locate the original file; its content hash will be verified."));
+       else if(item.jobId&&!item.file)copy.append(el("small","queue-source-detail",item.sourceAvailable===true?"Server has a readable working upload; this browser has no retry source file.":"Source is not retained for retry. Reselect the original file; filenames are not matched automatically."));
       else if(!item.jobId&&item.file)copy.append(el("small","queue-source-detail","Original file is held in this browser tab."));
       const actions=el("div","row-actions");
+       if(item.projectSourceSha256&&!item.file)actions.append(queueAction("Locate source",`Locate and verify the saved-project source ${item.name}`,`locate-project-${identity}`,()=>promptProjectSource(item)));
       if(activeStates.has(item.state)){const progress=el("div","row-progress"),bar=el("span");progress.setAttribute("role","progressbar");progress.setAttribute("aria-label",`Conversion progress for ${item.name}`);progress.setAttribute("aria-valuemin","0");progress.setAttribute("aria-valuemax","100");progress.setAttribute("aria-valuenow",String(item.progress||0));bar.style.width=`${Math.max(2,Math.min(100,item.progress||0))}%`;progress.append(bar);actions.append(progress);}
-      if(item.state==="completed"&&item.jobId){const link=el("a","row-button","Download ↓");link.href=`/api/jobs/${encodeURIComponent(item.jobId)}/download`;link.download=item.outputName||"";actions.append(link);}
+      if(item.state==="completed"&&item.jobId){const link=el("a","row-button","Download ↓");link.dataset.actionKey=`download-${identity}`;link.href=`/api/jobs/${encodeURIComponent(item.jobId)}/download`;link.download=item.outputName||"";actions.append(link);}
       if(item.state==="completed"&&item.jobId){
         actions.append(queueAction("Reveal file",`Reveal output for ${item.name}`,`reveal-${identity}`,()=>workspaceAction(`/api/jobs/${encodeURIComponent(item.jobId)}/reveal`)));
         actions.append(queueAction("Save copy",`Save a copy of ${item.name} to the selected folder`,`copy-${identity}`,()=>saveOutputCopy(item)));
@@ -1038,10 +1064,173 @@ if (typeof document !== "undefined") (() => {
   function settingsDescription(settings){const names={SBS:"Side by side · full",XREAL_SBS:"XREAL 1S · Full SBS",HALFSBS:"Side by side · half",TB:"Top / bottom · full",HALFTB:"Top / bottom · half",CROSS:"Cross-eye",ANAGLYPH:"Anaglyph · red / cyan",DEPTH:"Depth map",RGBD:"RGB + depth"};const models={"depth-anything-v2-small":"Small","depth-anything-v2-base":"Base","depth-anything-v2-large":"Large","dpt-hybrid-midas":"DPT Hybrid · MiDaS",balanced:"Visual approximation",precision:"Custom ONNX"};const devices={auto:"Auto",hybrid:"GPU + CPU · hybrid",gpu:"NVIDIA GPU",cpu:"CPU only"};const sizes=settings.depth_mode==="dpt-hybrid-midas"?"fixed 384 px":`${settings.input_size} px`;return `${names[settings.layout]} · strength ${Number(settings.strength).toFixed(1)} · convergence ${Number(settings.convergence).toFixed(2)} · ${models[settings.depth_mode]} · ${sizes} · ${devices[settings.execution_mode]} · ${settings.resolution==="source"?"Match source":"Up to 1080p"} · ${settings.quality} encoding · smoothing ${Number(settings.temporal_smoothing).toFixed(2)} · edge refinement ${settings.edge_refinement?"on":"off"} · invert ${settings.invert_depth?"on":"off"}`;}
   function refreshPerformancePresetStatus(){const current=currentSettingsForPreset(),dirty=frontendContract.hasUnsavedSettings(performanceBaseline,current);ui.performancePresetStatus.textContent=`${importedPresetBaseline?"Imported settings":ui.performancePreset.options[ui.performancePreset.selectedIndex]?.text || "Custom settings"} · ${dirty?"Unsaved changes":"Saved preset"}`;ui.performancePresetSummary.textContent=`Exact settings: ${settingsDescription(current)}`;ui.resetPerformancePreset.disabled=ui.performancePreset.value==="custom";}
   function assignSettings(settings){ui.layoutSelect.value=settings.layout;ui.strength.value=String(settings.strength);ui.convergence.value=String(settings.convergence);ui.depthMode.value=settings.depth_mode;ui.executionMode.value=settings.execution_mode;ui.modelSize.value=String(settings.input_size);ui.resolution.value=settings.resolution;ui.quality.value=settings.quality;ui.temporalSmoothing.value=String(settings.temporal_smoothing);ui.edgeRefinement.checked=settings.edge_refinement;ui.invertDepth.checked=settings.invert_depth;}
+  function writeNamedPresets(){try{window.localStorage.setItem(namedPresetsKey,JSON.stringify({schema_version:1,presets:namedPresets}));return true;}catch{ui.savedPresetStatus.textContent="Browser storage is unavailable; this change was not saved.";return false;}}
+  function refreshNamedPresetOptions(selectedName=""){
+    const options=[el("option","","Choose a saved preset")];options[0].value="";
+    const ordered=[...namedPresets].sort((a,b)=>Number(b.favorite)-Number(a.favorite)||a.name.localeCompare(b.name,undefined,{sensitivity:"base"}));
+    for(const preset of ordered){const option=el("option","",`${preset.favorite?"★ ":""}${preset.name}`);option.value=preset.name;options.push(option);}
+    ui.savedPresetSelect.replaceChildren(...options);ui.savedPresetSelect.value=selectedName;
+    const selected=namedPresets.find((preset)=>preset.name===selectedName);
+    ui.savedPresetName.value=selected?.name||"";ui.savedPresetFavorite.checked=Boolean(selected?.favorite);
+    ui.deleteNamedPreset.disabled=!selected;ui.applyNamedPreset.disabled=!selected;
+  }
+  function loadNamedPresets(){
+    try{
+      const raw=window.localStorage.getItem(namedPresetsKey);if(!raw){namedPresets=[];refreshNamedPresetOptions();return;}
+      const parsed=JSON.parse(raw);if(parsed?.schema_version!==1||!Array.isArray(parsed.presets)||parsed.presets.length>namedPresetLimit)throw new Error("Saved presets have an invalid format.");
+      const names=new Set();namedPresets=parsed.presets.map((preset)=>{
+        if(!preset||typeof preset.name!=="string"||typeof preset.favorite!=="boolean")throw new Error("A saved preset has invalid fields.");
+        const name=preset.name.trim();if(!name||name.length>namedPresetNameLimit||/[\x00-\x1f\x7f]/.test(name))throw new Error("A saved preset name is invalid.");
+        const identity=name.toLocaleLowerCase();if(names.has(identity))throw new Error("Saved preset names must be unique.");names.add(identity);
+        return {name,favorite:preset.favorite,settings:frontendContract.validateSettings(preset.settings)};
+      });
+      ui.savedPresetStatus.textContent=`${namedPresets.length} of ${namedPresetLimit} presets saved on this device.`;refreshNamedPresetOptions();
+    }catch(error){namedPresets=[];refreshNamedPresetOptions();ui.savedPresetStatus.textContent=`Saved presets could not be loaded: ${error.message}`;}
+  }
+  function selectNamedPreset(){const preset=namedPresets.find((entry)=>entry.name===ui.savedPresetSelect.value);ui.savedPresetName.value=preset?.name||"";ui.savedPresetFavorite.checked=Boolean(preset?.favorite);ui.deleteNamedPreset.disabled=!preset;ui.applyNamedPreset.disabled=!preset;}
+  function saveNamedPreset(){
+    const name=String(ui.savedPresetName.value||"").trim();
+    if(!name||name.length>namedPresetNameLimit||/[\x00-\x1f\x7f]/.test(name)){ui.savedPresetStatus.textContent=`Enter a name of 1–${namedPresetNameLimit} characters.`;ui.savedPresetName.focus();return;}
+    const identity=name.toLocaleLowerCase(),index=namedPresets.findIndex((preset)=>preset.name.toLocaleLowerCase()===identity);
+    if(index<0&&namedPresets.length>=namedPresetLimit){ui.savedPresetStatus.textContent=`You can save up to ${namedPresetLimit} presets. Delete one to save another.`;return;}
+    const preset={name,favorite:ui.savedPresetFavorite.checked,settings:frontendContract.validateSettings(currentSettingsForPreset())};
+    const updated=[...namedPresets];if(index<0)updated.push(preset);else updated[index]=preset;
+    const previous=namedPresets;namedPresets=updated;if(!writeNamedPresets()){namedPresets=previous;return;}
+    refreshNamedPresetOptions(name);performanceBaseline={...preset.settings};importedPresetBaseline=false;ui.performancePreset.value="custom";ui.presetSelect.value="custom";ui.savedPresetStatus.textContent=`Saved “${name}” on this device.`;refreshPerformancePresetStatus();
+  }
+  function applyNamedPreset(){
+    const preset=namedPresets.find((entry)=>entry.name===ui.savedPresetSelect.value);if(!preset)return;
+    assignSettings(frontendContract.validateSettings(preset.settings));performanceBaseline={...preset.settings};importedPresetBaseline=false;ui.performancePreset.value="custom";ui.presetSelect.value="custom";updateSettings();ui.savedPresetStatus.textContent=`Applied “${preset.name}”. No job was started.`;
+  }
+  function deleteNamedPreset(){
+    const name=ui.savedPresetSelect.value;if(!name)return;const previous=namedPresets;namedPresets=namedPresets.filter((preset)=>preset.name!==name);
+    if(!writeNamedPresets()){namedPresets=previous;return;}refreshNamedPresetOptions();ui.savedPresetStatus.textContent=`Deleted “${name}”. Current settings were not changed.`;
+  }
   function applyPerformancePreset(name){const settings=frontendContract.performancePreset(name);if(!settings)return;importedPresetBaseline=false;performanceBaseline=settings;assignSettings(settings);ui.performancePreset.value=name;ui.presetSelect.value="custom";updateSettings();}
   function resetPerformancePreset(){if(ui.performancePreset.value==="custom")return;applyPerformancePreset(ui.performancePreset.value);}
   function exportPresetFile(){try{const preset=frontendContract.exportUserPreset(currentSettingsForPreset());const blob=new Blob([JSON.stringify(preset,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="stereolab-settings-v1.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),0);toast("Settings preset exported.");}catch(error){toast(error.message,true);}}
   async function importPresetFile(file){if(!file)return;try{const parsed=JSON.parse(await file.text()),settings=frontendContract.validateUserPreset(parsed);assignSettings(settings);performanceBaseline={...settings};importedPresetBaseline=true;ui.performancePreset.value="custom";ui.presetSelect.value="custom";updateSettings();toast("Settings imported and validated. No model was installed or downloaded.");}catch(error){toast(`Preset not applied: ${error.message}`,true);}finally{ui.importPresetFile.value="";}}
+  function projectExactKeys(value,keys){if(!value||typeof value!=="object"||Array.isArray(value))throw new Error("Project data must be an object.");const actual=Object.keys(value).sort(),expected=[...keys].sort();if(actual.length!==expected.length||actual.some((key,index)=>key!==expected[index]))throw new Error("Project data has unsupported or missing fields.");}
+  function projectUuid(value){return typeof value==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);}
+  function projectMediaType(name){const ext=(String(name).split(".").pop()||"").toLowerCase();if(imageExtensions.has(ext))return "image";if(videoExtensions.has(ext))return "video";return null;}
+  function projectSafeBasename(value){return typeof value==="string"&&value.length>0&&value.length<=255&&value===value.trim()&&!/[\\/:\u0000-\u001f\u007f]/.test(value)&&value!=="."&&value!=="..";}
+  function validateProjectDocument(value){
+    projectExactKeys(value,["schema_version","project_id","project_name","created_at_ms","settings","output_name_template","selected_source_id","preview_time_seconds","sources"]);
+    if(value.schema_version!==PROJECT_SCHEMA_VERSION||!projectUuid(value.project_id))throw new Error("This project version or identity is not supported.");
+    if(typeof value.project_name!=="string"||!value.project_name.trim()||value.project_name.length>80||/[\\/:\u0000-\u001f\u007f]/.test(value.project_name))throw new Error("Project name must be 1–80 characters without path or control characters.");
+    if(!Number.isSafeInteger(value.created_at_ms)||value.created_at_ms<0)throw new Error("Project creation time is invalid.");
+    const settings=frontendContract.validateSettings(value.settings),maxTemplate=namingCapability?.max_template_length??120;
+    const outputNameTemplate=frontendContract.validateOutputNameTemplate(value.output_name_template,maxTemplate);
+    if(!Array.isArray(value.sources)||value.sources.length<1||value.sources.length>PROJECT_MAX_SOURCES)throw new Error(`A project must contain 1–${PROJECT_MAX_SOURCES} sources.`);
+    const ids=new Set();let totalBytes=0;
+    const sources=value.sources.map(source=>{
+      projectExactKeys(source,["source_id","name","media_type","size_bytes","sha256","settings","output_name_template"]);
+      if(!projectUuid(source.source_id)||ids.has(source.source_id))throw new Error("Project source identities must be unique UUIDs.");ids.add(source.source_id);
+      if(!projectSafeBasename(source.name)||projectMediaType(source.name)!==source.media_type)throw new Error("A project source needs a supported basename and matching media type.");
+      if(!Number.isSafeInteger(source.size_bytes)||source.size_bytes<1||source.size_bytes>PROJECT_MAX_SOURCE_BYTES)throw new Error("A project source size is invalid or exceeds the 8 GiB upload limit.");
+      totalBytes+=source.size_bytes;if(!Number.isSafeInteger(totalBytes)||totalBytes>PROJECT_MAX_TOTAL_BYTES)throw new Error("Project sources exceed the 64 GiB verification limit.");
+      if(typeof source.sha256!=="string"||!/^[a-f0-9]{64}$/.test(source.sha256))throw new Error("A project source fingerprint is invalid.");
+      const sourceSettings=frontendContract.validateSettings(source.settings);
+      const sourceTemplate=source.output_name_template===null?null:frontendContract.validateOutputNameTemplate(source.output_name_template,maxTemplate);
+      return {source_id:source.source_id,name:source.name,media_type:source.media_type,size_bytes:source.size_bytes,sha256:source.sha256,settings:sourceSettings,output_name_template:sourceTemplate};
+    });
+    if(value.selected_source_id!==null&&(!projectUuid(value.selected_source_id)||!ids.has(value.selected_source_id)))throw new Error("The selected preview source is missing from this project.");
+    const selected=value.selected_source_id===null?null:sources.find(source=>source.source_id===value.selected_source_id);
+    const previewTime=value.preview_time_seconds;
+    if(previewTime!==null&&(!Number.isFinite(previewTime)||previewTime<0||previewTime>PROJECT_PREVIEW_TIME_LIMIT))throw new Error("The saved preview timestamp is outside the supported range.");
+    if((!selected||selected.media_type==="image")&&previewTime!==null)throw new Error("Only a selected video can have a preview timestamp.");
+    return {schema_version:PROJECT_SCHEMA_VERSION,project_id:value.project_id,project_name:value.project_name.trim(),created_at_ms:value.created_at_ms,settings,output_name_template:outputNameTemplate,selected_source_id:value.selected_source_id,preview_time_seconds:previewTime,sources};
+  }
+  function hashLocalFile(file,onProgress=()=>{}){
+    return new Promise((resolve,reject)=>{
+      let worker;
+      try{worker=new Worker("/static/source_hash_worker.js?v=stereolab-projects-1");}catch(error){reject(new Error(`Could not start the source fingerprint worker: ${error.message||error}`));return;}
+      let settled=false;
+      const finish=(error,value)=>{if(settled)return;settled=true;worker.terminate();error?reject(error):resolve(value);};
+      worker.onmessage=event=>{const data=event.data||{};if(typeof data.progress==="number"){onProgress(data.progress,data.total);return;}if(typeof data.error==="string"){finish(new Error(data.error));return;}if(typeof data.sha256==="string"&&/^[a-f0-9]{64}$/.test(data.sha256)&&data.size_bytes===file.size){finish(null,data.sha256);return;}finish(new Error("The source fingerprint worker returned an invalid result."));};
+      worker.onerror=event=>finish(new Error(String(event.message||"Source fingerprinting failed.")));
+      try{worker.postMessage({file});}catch(error){finish(new Error(`Could not read this source: ${error.message||error}`));}
+    });
+  }
+  function projectStatus(message,error=false){ui.projectStatus.textContent=message;ui.projectStatus.classList.toggle("error",error);}
+  function projectReadySources(){return items.filter(item=>!item.jobId&&((item.state==="ready"&&item.file)||(item.projectSourceSha256&&!item.file)));}
+  async function saveProject(){
+    if(projectBusy)return;
+    const sources=projectReadySources();if(!sources.length){projectStatus("Add at least one ready source before saving a project.",true);return;}
+    if(sources.length>PROJECT_MAX_SOURCES||sources.reduce((sum,item)=>sum+Number(item.file?.size||item.size||0),0)>PROJECT_MAX_TOTAL_BYTES){projectStatus("This project exceeds its 200-source or 64 GiB verification limit.",true);return;}
+    let projectName=String(ui.projectName.value||"").trim();if(!projectName)projectName=(sources[0].name||"StereoLab project").replace(/\.[^.]+$/g,"").slice(0,80)||"StereoLab project";
+    if(projectName.length>80||/[\\/:\u0000-\u001f\u007f]/.test(projectName)){projectStatus("Project name must be at most 80 characters and cannot contain path characters.",true);ui.projectName.focus();return;}
+    const settings=currentSettingsForPreset(),maxTemplate=namingCapability?.max_template_length??120;
+    let outputNameTemplate;try{outputNameTemplate=frontendContract.validateOutputNameTemplate(currentOutputNameTemplate,maxTemplate);}catch(error){projectStatus(`Fix the output name template first: ${error.message}`,true);ui.outputNameTemplate.focus();return;}
+    projectBusy=true;updateQueue();projectStatus(`Preparing ${sources.length} source${sources.length===1?"":"s"}…`);
+    const records=[],idsByUid=new Map(),fingerprints=new Map();
+    try{
+      for(let index=0;index<sources.length;index++){
+        const item=sources[index],mediaType=projectMediaType(item.name),file=item.file||null,size=Number(file?.size??item.size),sourceId=item.projectSourceId||crypto.randomUUID();
+        if(!projectSafeBasename(item.name)||!mediaType||mediaType!==item.mediaType||!Number.isSafeInteger(size)||size<1||size>PROJECT_MAX_SOURCE_BYTES)throw new Error(`Source “${item.name}” has invalid identity or size.`);
+        if(!projectUuid(sourceId)||records.some(record=>record.source_id===sourceId))throw new Error("Project source identity generation produced a duplicate.");
+        let sha256=item.projectSourceSha256||null;
+        if(file){
+          if(file.size!==size)throw new Error(`Source “${item.name}” changed size before it could be saved.`);
+          projectStatus(`Fingerprinting source ${index+1} of ${sources.length}: ${item.name} · ${formatBytes(0)} of ${formatBytes(size)}`);
+          const computed=await hashLocalFile(file,(loaded,total)=>projectStatus(`Fingerprinting source ${index+1} of ${sources.length}: ${item.name} · ${formatBytes(loaded)} of ${formatBytes(total)}`));
+          if(sha256&&computed!==sha256)throw new Error(`Source “${item.name}” no longer matches its saved project fingerprint.`);
+          sha256=computed;fingerprints.set(item.uid,computed);
+        }
+        if(typeof sha256!=="string"||!/^[a-f0-9]{64}$/.test(sha256))throw new Error(`Source “${item.name}” has no verified fingerprint.`);
+        const sourceSettings=frontendContract.validateSettings(item.settingsSnapshot||settings),sourceTemplate=item.outputNameTemplateSnapshot?frontendContract.validateOutputNameTemplate(item.outputNameTemplateSnapshot,maxTemplate):null;
+        const record={source_id:sourceId,name:item.name,media_type:mediaType,size_bytes:size,sha256,settings:sourceSettings,output_name_template:sourceTemplate};
+        records.push(record);idsByUid.set(item.uid,sourceId);
+      }
+      const selectedItem=sources.find(item=>item.uid===selectedUid),selectedSourceId=selectedItem?idsByUid.get(selectedItem.uid):null;
+      let previewTime=null;
+      if(selectedItem&&selectedItem.mediaType==="video"){
+        const candidate=selectedItem.file?Number(ui.sourceVideo.currentTime):Number(selectedItem.projectPreviewTimeSeconds??0);
+        previewTime=Number.isFinite(candidate)?Math.max(0,Math.min(PROJECT_PREVIEW_TIME_LIMIT,candidate)):0;
+      }
+      const document=validateProjectDocument({schema_version:PROJECT_SCHEMA_VERSION,project_id:crypto.randomUUID(),project_name:projectName,created_at_ms:Date.now(),settings,output_name_template:outputNameTemplate,selected_source_id:selectedSourceId,preview_time_seconds:previewTime,sources:records});
+      const serialized=JSON.stringify(document,null,2);if(new TextEncoder().encode(serialized).length>PROJECT_MAX_BYTES)throw new Error("The project file exceeds the 2 MiB size limit.");
+      const blob=new Blob([serialized],{type:"application/json"}),url=URL.createObjectURL(blob),link=documentCreateProjectLink(url,projectName);link.click();setTimeout(()=>URL.revokeObjectURL(url),0);
+      for(const item of sources){const sourceId=idsByUid.get(item.uid);item.projectSourceId=sourceId;if(fingerprints.has(item.uid)){item.projectSourceSha256=fingerprints.get(item.uid);item.projectSourceSizeBytes=item.file.size;}if(item.uid===selectedUid)item.projectPreviewTimeSeconds=previewTime;}
+      ui.projectName.value=projectName;projectStatus(`Saved “${projectName}”. Media is not copied; reopening will verify each source before adding it to the queue.`);
+    }catch(error){projectStatus(`Project was not saved: ${String(error.message||error).slice(0,240)}`,true);}
+    finally{projectBusy=false;updateQueue();}
+  }
+  function documentCreateProjectLink(url,projectName){const link=document.createElement("a"),safeName=projectName.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,64)||"stereolab-project";link.href=url;link.download=`${safeName}.stereolab-project.json`;return link;}
+  async function openProjectFile(file){
+    if(!file||projectBusy)return;
+    projectBusy=true;updateQueue();projectStatus("Reading and validating project…");
+    try{
+      if(!Number.isSafeInteger(file.size)||file.size<2||file.size>PROJECT_MAX_BYTES)throw new Error("Project files must be between 2 bytes and 2 MiB.");
+      const project=validateProjectDocument(JSON.parse(await file.text()));
+      if(items.length+project.sources.length>PROJECT_MAX_QUEUE_ENTRIES)throw new Error(`Opening this project would exceed the ${PROJECT_MAX_QUEUE_ENTRIES}-row local queue limit.`);
+      const recovered=project.sources.map(source=>({uid:crypto.randomUUID(),projectSourceId:crypto.randomUUID(),projectSourceSha256:source.sha256,projectSourceSizeBytes:source.size_bytes,projectPreviewTimeSeconds:source.source_id===project.selected_source_id?project.preview_time_seconds:null,name:source.name,size:source.size_bytes,mediaType:source.media_type,file:null,state:"missing",progress:0,message:"Locate the exact source to add it to the ready queue",settingsSnapshot:source.settings,settingsFrozen:true,outputNameTemplateSnapshot:source.output_name_template,namingFrozen:Boolean(source.output_name_template)}));
+      if(new Set(recovered.map(item=>item.uid)).size!==recovered.length||new Set(recovered.map(item=>item.projectSourceId)).size!==recovered.length)throw new Error("Could not create unique local identities for project sources.");
+      const selectedRecord=project.selected_source_id?project.sources.find(source=>source.source_id===project.selected_source_id):null;
+      items.push(...recovered);assignSettings(project.settings);performanceBaseline={...project.settings};importedPresetBaseline=true;ui.performancePreset.value="custom";ui.presetSelect.value="custom";
+      currentOutputNameTemplate=project.output_name_template;ui.outputNameTemplate.value=project.output_name_template;ui.projectName.value=project.project_name;updateSettings(false);
+      if(selectedRecord){const selected=recovered[project.sources.indexOf(selectedRecord)];selectItem(selected);}
+      const missing=recovered.length;projectStatus(`Opened “${project.project_name}”. ${missing} source${missing===1?" needs":"s need"} verification. No conversion was started.`);updateQueue();
+    }catch(error){projectStatus(`Project was not opened: ${String(error.message||error).slice(0,240)}`,true);}
+    finally{projectBusy=false;updateQueue();ui.projectFileInput.value="";}
+  }
+  function promptProjectSource(item){const picker=document.createElement("input");picker.type="file";picker.accept=".mp4,.webm,.mkv,.mov,.avi,.wmv,.flv,.ts,.mts,.m2ts,.m4v,.jpg,.jpeg,.png,.webp";picker.addEventListener("change",()=>{const file=picker.files?.[0];if(file)relinkProjectSource(item,file);});picker.click();}
+  async function relinkProjectSource(item,file){
+    if(projectBusy||!file||!items.includes(item)||!item.projectSourceSha256)return;
+    const mediaType=projectMediaType(file.name);if(!mediaType||mediaType!==item.mediaType){projectStatus(`Choose a supported ${item.mediaType} file for “${item.name}”.`,true);return;}
+    if(file.size!==item.projectSourceSizeBytes){projectStatus(`“${file.name}” has a different size. The saved source remains unresolved.`,true);return;}
+    projectBusy=true;item.message="Verifying source fingerprint";updateQueue();projectStatus(`Verifying “${item.name}” in bounded chunks…`);
+    try{
+      const sha256=await hashLocalFile(file,(loaded,total)=>projectStatus(`Verifying “${item.name}” · ${formatBytes(loaded)} of ${formatBytes(total)}`));
+      if(sha256!==item.projectSourceSha256)throw new Error("The file content does not match this saved project. The source remains unresolved.");
+      if(!items.includes(item))return;
+      item.file=file;item.size=file.size;item.state="ready";item.message="Source verified · ready to convert";
+      if(selectedUid===item.uid)selectItem(item);
+      const remaining=items.filter(entry=>entry.projectSourceSha256&&!entry.file).length;
+      projectStatus(remaining?`Verified “${item.name}”. ${remaining} project source${remaining===1?" remains":"s remain"} to locate.`:`Verified “${item.name}”. Every project source is ready; review the queue before converting.`);
+    }catch(error){if(items.includes(item)&&!item.file)item.message="Source not verified; locate the original file";projectStatus(`Source was not linked: ${String(error.message||error).slice(0,220)}`,true);}
+    finally{projectBusy=false;updateQueue();}
+  }
   async function measureInputDetail(){const blocked=calibrationBlock();if(blocked){toast(blocked,true);return;}ui.sourceVideo.pause();const context=calibrationContext();calibrationBusy=true;calibrationResult=null;calibrationResultContext=null;calibrationNotice="";ui.calibrationReport.hidden=true;ui.applyCalibration.hidden=true;ui.calibrationStatus.textContent="Measuring depth-input inference. One in-flight inference may exceed the selected budget…";updatePreview();let discarded=false;
     try{const source=isImage(previewFile)?ui.sourceImage:ui.sourceVideo,w=source.naturalWidth||source.videoWidth,h=source.naturalHeight||source.videoHeight;if(!w||!h)throw new Error("The selected source has no decoded frame.");const scale=Math.min(1,960/w,540/h),canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(w*scale));canvas.height=Math.max(1,Math.round(h*scale));drawSourceFrame(source,canvas);const blob=await new Promise((resolve,reject)=>canvas.toBlob((value)=>value?resolve(value):reject(new Error("Could not capture this frame.")),"image/jpeg",.94));if(!frontendContract.calibrationContextMatches(context,calibrationContext())){discarded=true;calibrationNotice="Measurement discarded because the source frame, settings, or budget changed before it started.";return;}const data=new FormData();data.append("file",blob,"calibration-frame.jpg");data.append("depth_mode",ui.depthMode.value);data.append("execution_mode",ui.executionMode.value);data.append("budget_seconds",String(context.budget));const report=frontendContract.validateCalibrationReport(await request("/api/calibration",{method:"POST",body:data}));if(!frontendContract.calibrationContextMatches(context,calibrationContext())){discarded=true;calibrationNotice="Measurement discarded because the source frame, settings, or budget changed while it was running.";return;}renderCalibrationReport(report);}
     catch(error){calibrationNotice=`Measurement failed: ${String(error.message||error).slice(0,260)}`;ui.calibrationReport.hidden=true;ui.applyCalibration.hidden=true;ui.calibrationStatus.textContent=calibrationNotice;toast(calibrationNotice,true);}
@@ -1178,13 +1367,13 @@ if (typeof document !== "undefined") (() => {
   async function submitItem(item,settings,outputNameTemplate=null){
     const nameTemplate=frontendContract.outputNameTemplateForSubmission(namingCapability,item,outputNameTemplate||currentOutputNameTemplate);
     item.settingsSnapshot=frontendContract.validateSettings(settings);item.settingsFrozen=true;if(nameTemplate){item.outputNameTemplateSnapshot=nameTemplate;item.namingFrozen=true;}item.state="uploading";item.message="Adding to local queue";item.error=null;updateQueue();
-    const data=new FormData();data.append("file",item.file,item.name);Object.entries(item.settingsSnapshot).forEach(([key,value])=>data.append(key,value));if(nameTemplate)data.append("output_name_template",nameTemplate);
+    const data=new FormData();data.append("file",item.file,item.name);Object.entries(item.settingsSnapshot).forEach(([key,value])=>data.append(key,value));if(nameTemplate)data.append("output_name_template",nameTemplate);if(item.projectSourceSha256)data.append("expected_source_sha256",item.projectSourceSha256);
     let completed=false;try{const job=await request("/api/jobs",{method:"POST",body:data});completed=mergeJob(item,job);items=items.filter((x)=>x===item||x.jobId!==job.id);}
-    catch(error){item.state="failed";item.error=error.message;item.message="Could not start conversion";}
+    catch(error){if(item.projectSourceSha256&&error.status===409&&/(does not match|no longer matches) the saved project/i.test(error.message)){item.file=null;item.state="missing";item.message="Saved-project source changed; locate it again";}else{item.state="failed";item.error=error.message;item.message="Could not start conversion";}}
     updateQueue();
     return completed;
   }
-  async function convertPending(){if(submitting)return;const pending=items.filter((x)=>!x.jobId&&x.state==="ready");if(!pending.length)return;const settings=currentSettingsForPreset(),block=frontendContract.queueReadiness(pending,settings,{runtime,models,customModelAvailable,catalogError});if(block){toast(block,true);return;}const namingBlock=queueNamingBlock(pending);if(namingBlock){toast(namingBlock,true);ui.outputNameTemplate.focus();return;}submitting=true;updateQueue();const completed=[];try{for(const item of pending){if(items.includes(item)&&item.state==="ready"&&await submitItem(item,frontendContract.effectiveQueueSettings(item,settings),namingCapability?frontendContract.outputNameTemplateForSubmit(item,currentOutputNameTemplate):null))completed.push(item.name);}showCompletionNoticeBatch(completed);}finally{submitting=false;updateQueue();await pollJobs();}}
+  async function convertPending(){if(submitting||projectBusy)return;const pending=items.filter((x)=>!x.jobId&&x.state==="ready");if(!pending.length)return;const settings=currentSettingsForPreset(),block=frontendContract.queueReadiness(pending,settings,{runtime,models,customModelAvailable,catalogError});if(block){toast(block,true);return;}const namingBlock=queueNamingBlock(pending);if(namingBlock){toast(namingBlock,true);ui.outputNameTemplate.focus();return;}submitting=true;updateQueue();const completed=[];try{for(const item of pending){if(items.includes(item)&&item.state==="ready"&&await submitItem(item,frontendContract.effectiveQueueSettings(item,settings),namingCapability?frontendContract.outputNameTemplateForSubmit(item,currentOutputNameTemplate):null))completed.push(item.name);}showCompletionNoticeBatch(completed);}finally{submitting=false;updateQueue();await pollJobs();}}
   let queuePaused = false, queueControlBusy = false, storageBusy = false;
   function showQueueControl(data){
     if(typeof data.paused!=="boolean"||!Number.isInteger(data.pending_count)||data.pending_count<0)throw new Error("Queue controls are unavailable. Refresh status to retry.");
@@ -1260,6 +1449,8 @@ if (typeof document !== "undefined") (() => {
   ui.glassesPreview.addEventListener("click",async()=>{try{if(document.fullscreenElement===ui.previewStage){await document.exitFullscreen();}else{await ui.previewStage.requestFullscreen();}}catch{toast("The browser could not open the fullscreen preview on this display.",true);}});document.addEventListener("fullscreenchange",()=>{ui.glassesPreview.textContent=document.fullscreenElement===ui.previewStage?"Exit fullscreen":"View on glasses";});
   ui.generatePreview.addEventListener("click",generatePreview);ui.previewDetail.addEventListener("change",markPreviewStale);ui.generateProcessedClip.addEventListener("click",generateProcessedClip);ui.cancelProcessedClip.addEventListener("click",cancelProcessedClip);ui.processedClipDuration.addEventListener("change",()=>{invalidateProcessedClipIfStale("Clip length changed");updateProcessedClipPanel();});ui.retryGpu.addEventListener("click",retryGpuAction);ui.presetSelect.addEventListener("change",()=>{applyPreset();refreshPerformancePresetStatus();});
   ui.performancePreset.addEventListener("change",()=>{if(ui.performancePreset.value==="custom"){performanceBaseline=currentSettingsForPreset();importedPresetBaseline=false;updateSettings(false);}else applyPerformancePreset(ui.performancePreset.value);});ui.resetPerformancePreset.addEventListener("click",resetPerformancePreset);ui.exportPreset.addEventListener("click",exportPresetFile);ui.importPresetButton.addEventListener("click",()=>ui.importPresetFile.click());ui.importPresetFile.addEventListener("change",()=>importPresetFile(ui.importPresetFile.files[0]));
+  ui.savedPresetSelect.addEventListener("change",selectNamedPreset);ui.savedPresetName.addEventListener("input",()=>{if(ui.savedPresetSelect.value&&ui.savedPresetName.value!==ui.savedPresetSelect.value){ui.savedPresetSelect.value="";ui.deleteNamedPreset.disabled=true;ui.applyNamedPreset.disabled=true;}});ui.saveNamedPreset.addEventListener("click",saveNamedPreset);ui.applyNamedPreset.addEventListener("click",applyNamedPreset);ui.deleteNamedPreset.addEventListener("click",deleteNamedPreset);
+   ui.saveProject.addEventListener("click",saveProject);ui.openProject.addEventListener("click",()=>ui.projectFileInput.click());ui.projectFileInput.addEventListener("change",()=>openProjectFile(ui.projectFileInput.files?.[0]));
   ui.calibrationBudget.addEventListener("change",refreshCalibrationControls);ui.calibrateInput.addEventListener("click",measureInputDetail);ui.applyCalibration.addEventListener("click",applyMeasuredInputDetail);
   ["strength","convergence","temporalSmoothing"].forEach((id)=>ui[id].addEventListener("input",()=>{ui.presetSelect.value="custom";updateSettings();}));["edgeRefinement","invertDepth"].forEach((id)=>ui[id].addEventListener("change",()=>{ui.presetSelect.value="custom";updateSettings();}));
   ["layoutSelect","modelSize","resolution","quality","executionMode"].forEach((id)=>ui[id].addEventListener("change",()=>updateSettings()));ui.depthMode.addEventListener("change",()=>{updateSettings();renderModels();});
@@ -1272,6 +1463,6 @@ if (typeof document !== "undefined") (() => {
   ui.outputNameTemplate.addEventListener("input",()=>{currentOutputNameTemplate=ui.outputNameTemplate.value;try{frontendContract.validateOutputNameTemplate(currentOutputNameTemplate,namingCapability?.max_template_length??120);ui.outputNameTemplate.removeAttribute("aria-invalid");}catch(error){ui.outputNameTemplate.setAttribute("aria-invalid","true");ui.outputNamingStatus.textContent=error.message;}updateQueue();});
   ui.clearQueueButton.addEventListener("click",()=>{const finished=items.filter((x)=>["completed","failed","canceled"].includes(x.state));finished.forEach(removeItem);saveHidden();updateQueue();toast(finished.length?`${finished.length} finished item${finished.length===1?"":"s"} removed from this browser’s list.`:"There are no finished items to clear.");});
   ui.helpButton.addEventListener("click",()=>ui.aboutDialog.showModal());ui.aboutDone.addEventListener("click",()=>ui.aboutDialog.close());window.addEventListener("beforeunload",()=>{if(previewUrl)URL.revokeObjectURL(previewUrl);});
-  updateCompletionNotificationControls();updateSettings(false);Promise.allSettled([loadStatus(),loadModels(),pollJobs()]);
+  loadNamedPresets();updateCompletionNotificationControls();updateSettings(false);Promise.allSettled([loadStatus(),loadModels(),pollJobs()]);
 })();
 

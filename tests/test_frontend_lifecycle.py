@@ -38,8 +38,30 @@ class FrontendLifecycleTests(unittest.TestCase):
     def test_cleanup_warning_is_visible_without_changing_terminal_state(self):
         self.run_lifecycle("cleanup-warning")
 
+    def test_removing_selected_queued_export_clears_preview_and_calibration(self):
+        self.run_lifecycle("remove-selected-queued")
+
+    def test_queue_poll_preserves_disclosure_and_keyboard_focus(self):
+        self.run_lifecycle("queue-render-state")
+
+    def test_named_favorite_presets_persist_apply_update_and_delete(self):
+        self.run_lifecycle("named-presets")
+
     def test_queue_pause_controls_follow_confirmed_server_state(self):
         self.run_lifecycle("queue-controls")
 
     def test_storage_cleanup_requires_explicit_selection(self):
         self.run_lifecycle("storage-controls")
+
+    def test_saved_project_round_trip_hash_relink_queue_order_and_preview_time(self):
+        self.run_lifecycle("project-roundtrip")
+
+    def test_invalid_project_does_not_partially_mutate_queue(self):
+        self.run_lifecycle("project-invalid-atomic")
+
+    def test_source_sha256_vectors_and_bounded_worker_streaming(self):
+        result = subprocess.run(
+            [NODE, str(ROOT / "tests" / "source_hash_test.cjs")],
+            cwd=ROOT, text=True, capture_output=True, check=False, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

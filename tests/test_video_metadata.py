@@ -31,13 +31,17 @@ class VideoMetadataTests(unittest.TestCase):
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(self.root, target)
 
-    def capture(self, count=float('nan'), width=16, height=12, fps=24):
+    def capture(self, count=float('nan'), width=16, height=12, fps=24, frames=1, position_ms=0):
         capture = Mock()
         capture.isOpened.return_value = True
-        capture.get.side_effect = lambda prop: {
+        properties = {
             cv2.CAP_PROP_FRAME_WIDTH: width, cv2.CAP_PROP_FRAME_HEIGHT: height,
-            cv2.CAP_PROP_FRAME_COUNT: count, cv2.CAP_PROP_FPS: fps}[prop]
-        capture.read.side_effect = [(True, np.full((12, 16, 3), 100, np.uint8)), (False, None)]
+            cv2.CAP_PROP_FRAME_COUNT: count, cv2.CAP_PROP_FPS: fps,
+        }
+        capture.get.side_effect = lambda prop: (
+            position_ms if prop == cv2.CAP_PROP_POS_MSEC else properties[prop])
+        frame = np.full((12, 16, 3), 100, np.uint8)
+        capture.read.side_effect = [(True, frame.copy()) for _ in range(frames)] + [(False, None)]
         return capture
 
     def run_video(self, capture, **changes):
@@ -71,6 +75,24 @@ class VideoMetadataTests(unittest.TestCase):
                 self.assertIsNone(self.job.total_frames)
                 self.assertIsNone(self.job.public()['eta_seconds'])
                 capture.release.assert_called()
+
+    def test_approximate_frame_count_can_exceed_decoded_count_without_failing(self):
+        capture = self.capture(count=31, fps=25, frames=30, position_ms=1160)
+
+        output = self.run_video(capture)
+
+        self.assertTrue(output.is_file())
+        self.assertEqual(self.job.frames_processed, 30)
+        self.assertEqual(self.job.total_frames, 31, 'The original metadata estimate must remain visible.')
+
+    def test_decoder_failure_well_before_estimated_duration_fails(self):
+        capture = self.capture(count=100, fps=25, frames=30, position_ms=1160)
+
+        with self.assertRaisesRegex(RuntimeError, 'stopped early after 30 of approximately 100 expected frames'):
+            self.run_video(capture)
+
+        capture.release.assert_called()
+        self.assertEqual(self.job.total_frames, 100)
 
     def test_invalid_dimensions_release_capture_and_have_an_actionable_error(self):
         for width in (float('nan'), float('inf'), -1, 0):

@@ -24,9 +24,9 @@ finished. See PROGRESS.md and HANDOFF.md for dated commands, reports and limitat
 | 2.1 | Motion-aligned history prototype and matched synthetic clips evaluated, not adopted | No consistent improvement demonstrated; raw-scale normalization remains unsolved |
 | 2.2 | Visibility-order prototype with hole masks and matched fixtures evaluated, not adopted | Large CPU cost and no real-video superiority established |
 | 3.1 | Exact-frame Source/Depth split, zoom/pan, full-detail stills and processed clips. Corrected strict verifier requires all three pair comparisons and public execution proof; fresh isolated GPU API run passed with all 36 decoded frames identical. Exact-input diagnostics isolate repeat drift after preprocessing; a single warmup does not ensure repeatability | Original failed GPU run remains preserved; intermittent raw-output variance and codec amplification need further investigation. Real footage, deeper stereo A/B and physical-device/display review remain open |
-| 3.2 | Four exact performance presets, reset/dirty state, strict versioned JSON import/export | Broader accessibility and real-device validation |
+| 3.2 | Four exact performance presets, reset/dirty state, strict versioned JSON import/export, and up to 20 browser-local named presets with favorites | Broader accessibility and real-device validation |
 | 3.3 | Atomic pending-export reorder/remove/settings/naming, immutable snapshots, ready-file order/batch settings and names, source-aware retry/duplicate, per-file frozen readiness, tab-only notification opt-in and guarded keyboard shortcuts | Real browser/OS notification delivery and broader accessibility/device review; durable retry sources remain Phase 4 |
-| 4.1 | Opt-in metadata history integrated: worker/lease lifespan, streamed source hashes, durable admission/edits/lifecycle, prior-launch API/UI and downloads. Isolated Windows CPU restart, pending interruption, identical download bytes and second-owner rejection passed; settings reuse and narrow-width UI checked | Real symlink and POSIX execution proof; broader real-media/device validation. Project records, retained sources and actual recovery remain separate work |
+| 4.1 | Opt-in metadata history integrated: worker/lease lifespan, streamed source hashes, durable admission/edits/lifecycle, prior-launch API/UI and downloads. Portable metadata-only project files now save queue order, per-source settings and preview time; exact source relinking is verified in a worker and again during upload admission | Real symlink and POSIX execution proof; broader real-media/device validation. Source retention and interrupted-job recovery remain separate work |
 | 3.4 | Pause/resume between jobs, visible pending count, immediate cancellation while paused, shutdown wakeup and launch-local reset implemented; browser controls verified | Active-video pause and durable pause state are separate work |
 | 3.5 | Windows open-folder/reveal helpers and Save copy to an existing folder implemented; exclusive creation, partial-copy cleanup and original preservation tested. Browser copy verified byte-for-byte | Actual Explorer window behavior and packaged Windows validation remain open. Direct per-job conversion destinations require a history-format extension; current copies preserve managed originals and use extra space |
 | 3.6 | Managed usage by category, explicit inactive temporary-file selection and deletion, per-job cleanup retry, staged-upload/job protection and Windows lock handling implemented | Explicit output/model deletion and persistent depth-cache management remain future slices; junction rejection tested with stub, live symlink test unavailable without Windows privilege |
@@ -58,7 +58,7 @@ Keep concurrent assignments on separate files and interfaces. Have Luna finish a
 Already implemented:
 
 - Four downloadable built-in ONNX models: Depth Anything V2 Small/Base/Large and DPT Hybrid/MiDaS, with pinned downloads and acceptance checks.
-- DirectML GPU inference, CPU fallback for Auto/Hybrid, explicit GPU failure reporting, and one resident inference session.
+- DirectML GPU inference, CPU fallback for Auto, strict NVIDIA requirements for GPU + CPU and NVIDIA GPU modes, explicit GPU failure reporting, and one resident inference session.
 - A 518-pixel long-side cap for Large on adapters reporting at most 4 GB; other GPU inputs normally cap at 924 pixels. Custom ONNX and approximation are CPU-only.
 - Bounded overlapping CPU decode and rendering around inference, NVENC probing with software fallback, per-job FPS/elapsed/ETA, and speed-impact explanations.
 - Single-frame preview, stereo controls, edge refinement, motion-gated temporal smoothing, eight layouts, queue cancellation and downloads.
@@ -271,11 +271,16 @@ Persist job metadata and validated settings, with a versioned project format and
 
 **Acceptance:** crash/restart cannot mark partial output complete; missing/changed sources are identified; output paths cannot escape intended destinations. Test migration and corrupted state recovery.
 
-Next slice: save/reopen a project containing source references/fingerprints,
-settings, selected preview timestamp and pending queue order. Provide “Locate
-missing source” with identity checks. Make source retention/copying an explicit
-choice with storage estimates. Metadata history alone is not a reusable project;
-reopening a project must not silently launch exports or imply interrupted-job resume.
+Portable `.stereolab-project.json` files now save ordered source fingerprints,
+per-source settings and output names, global settings, and a selected video preview
+timestamp. They contain no media or absolute paths. Opening appends unresolved rows;
+verified relinking makes a source ready, and the upload is checked again before
+admission. Reopening never starts exports or implies interrupted-job resume.
+
+Next slice: decide whether projects should optionally copy or retain source media,
+with explicit storage estimates and cleanup ownership, and design that alongside the
+persistent depth cache below. Current projects require the original media to be
+available for relinking; they do not provide source retention or job recovery.
 
 ### 4.2 Optional reusable depth cache — P2 / L
 

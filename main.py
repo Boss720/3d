@@ -76,6 +76,9 @@ NEURAL_MODES = {"depth-anything-v2-small", "depth-anything-v2-base", "depth-anyt
 DEPTH_MODES = {"balanced", "precision"} | NEURAL_MODES
 EXECUTION_MODES = {"auto", "cpu", "gpu", "hybrid"}
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
+MAX_MODEL_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+CALIBRATION_UPLOAD_BYTES = 24 * 1024 * 1024
+MULTIPART_OVERHEAD_BYTES = 256 * 1024
 ETA_MIN_FRAMES = 5
 ETA_MIN_SECONDS = 2.0
 
@@ -518,6 +521,29 @@ def run_image(job: Job, net: cv2.dnn_Net | None) -> Path:
     return target
 
 
+def decoder_stopped_early(expected_frames: int | None, decoded_frames: int,
+                          source_fps: float, position_ms: float | None) -> bool:
+    """Detect a substantial short decode while tolerating approximate metadata."""
+    if expected_frames is None or expected_frames <= decoded_frames or source_fps <= 0:
+        return False
+
+    expected_seconds = expected_frames / source_fps
+    tolerance_seconds = max(2.0 / source_fps, min(0.5, expected_seconds * 0.1))
+    tolerance_frames = max(2, math.ceil(source_fps * tolerance_seconds))
+    shortfall = expected_frames - decoded_frames
+    if shortfall <= tolerance_frames:
+        return False
+
+    if position_ms is not None and math.isfinite(position_ms) and position_ms > 0:
+        # Backends commonly report the timestamp of the last decoded frame,
+        # rather than the end boundary, so include one frame interval.
+        decoded_seconds = position_ms / 1000.0 + 1.0 / source_fps
+        return expected_seconds - decoded_seconds > tolerance_seconds
+
+    # If the backend exposes no playback position, require a clear count gap.
+    return shortfall > max(tolerance_frames, math.ceil(expected_frames * 0.001))
+
+
 def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) -> Path:
     ffmpeg = FFMPEG_PATH
     if not ffmpeg or not Path(ffmpeg).is_file():
@@ -537,6 +563,7 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         raise RuntimeError("Could not open this video. The file may use an unsupported codec or be damaged.")
 
     source_width, source_height, total_frames, source_fps, _ = video_metadata(capture)
+    metadata_total_frames = total_frames
     set_job(job.id, total_frames=total_frames, frames_processed=0)
     fps = ffprobe_fps(ffmpeg, source, source_fps)
 
@@ -587,6 +614,8 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
 
     reader = threading.Thread(target=drain_stderr, daemon=True)
     frame_index = 0
+    decoded_frame_count = 0
+    decoder_end_position_ms: float | None = None
     try:
         reader.start()
         depth_filter = TemporalDepthFilter(job.temporal_smoothing)
@@ -598,6 +627,7 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         raise
 
     def source_frames():
+        nonlocal decoded_frame_count, decoder_end_position_ms
         try:
             while True:
                 if job.cancel_event.is_set():
@@ -605,7 +635,12 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
                 with job.timings.measure("decode"):
                     ok, frame = capture.read()
                 if not ok:
+                    try:
+                        decoder_end_position_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC))
+                    except (cv2.error, TypeError, ValueError, OverflowError, KeyError):
+                        decoder_end_position_ms = None
                     return
+                decoded_frame_count += 1
                 if frame.shape[1] != width or frame.shape[0] != height:
                     frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
                 yield frame
@@ -663,6 +698,13 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         if frame_index == 0:
             stop_process(proc)
             raise RuntimeError("No video frames could be decoded.")
+        if decoder_stopped_early(metadata_total_frames, decoded_frame_count,
+                                  source_fps, decoder_end_position_ms):
+            stop_process(proc)
+            raise RuntimeError(
+                f"Video decoding stopped early after {decoded_frame_count:,} of approximately "
+                f"{metadata_total_frames:,} expected frames. Re-encode the source and retry."
+            )
         set_job(job.id, phase="finalization", message="Finalizing video and audio")
         with job.timings.measure("finalization"):
             if proc.stdin:
@@ -685,8 +727,7 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
             raise RuntimeError(detail)
         if not target.is_file() or target.stat().st_size == 0:
             raise RuntimeError("FFmpeg finished without producing an output file.")
-        set_job(job.id, frames_processed=frame_index,
-                total_frames=frame_index if total_frames is not None else None)
+        set_job(job.id, frames_processed=frame_index, total_frames=metadata_total_frames)
         return target
     except PipelineCancelled as exc:
         raise JobCancelled() from exc
@@ -938,6 +979,83 @@ async def application_lifespan(app):
 app = FastAPI(title="StereoLab", docs_url=None, redoc_url=None, lifespan=application_lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
+REQUEST_BODY_LIMITS = {
+    "/api/preview": PREVIEW_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES,
+    "/api/calibration": CALIBRATION_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES,
+    "/api/model": MAX_MODEL_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES,
+    "/api/jobs": MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES,
+}
+
+
+class RequestBodyTooLarge(OSError):
+    """Raised while parsing a multipart upload so Starlette closes partial files."""
+
+
+class RequestBodyLimitMiddleware:
+    """Reject oversized upload bodies before FastAPI creates multipart files."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        limit = REQUEST_BODY_LIMITS.get(scope.get("path")) if scope.get("type") == "http" and scope.get("method") == "POST" else None
+        if limit is None:
+            await self.app(scope, receive, send)
+            return
+
+        async def reject() -> None:
+            body = b'{"detail":"The complete upload request exceeds the allowed size."}'
+            await send({"type": "http.response.start", "status": 413, "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ]})
+            await send({"type": "http.response.body", "body": body, "more_body": False})
+
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"content-length":
+                try:
+                    if int(value) > limit:
+                        await reject()
+                        return
+                except ValueError:
+                    pass
+                break
+
+        received = 0
+        exceeded = False
+        response_replaced = False
+
+        async def limited_receive():
+            nonlocal received, exceeded
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    exceeded = True
+                    # MultiPartParser catches OSError, closes all staged UploadFiles,
+                    # then re-raises it. FastAPI may translate it to a 400, which
+                    # the send wrapper below replaces with the intended 413.
+                    raise RequestBodyTooLarge()
+            return message
+
+        async def limited_send(message):
+            nonlocal response_replaced
+            if exceeded:
+                if message.get("type") == "http.response.start" and not response_replaced:
+                    response_replaced = True
+                    await reject()
+                return
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, limited_send)
+        except RequestBodyTooLarge:
+            if not response_replaced:
+                await reject()
+
+
+app.add_middleware(RequestBodyLimitMiddleware)
+
 
 def local_api_access(host: str, scheme: str, origin: str | None,
                      fetch_site: str | None, mutating: bool) -> bool:
@@ -1165,8 +1283,8 @@ def validate_depth_mode(mode: str, execution_mode: str = "auto") -> None:
         raise HTTPException(status_code=400, detail="Choose a supported depth model or approximation.")
     if mode == "precision" and not MODEL_PATH.is_file():
         raise HTTPException(status_code=400, detail="Custom ONNX mode needs a compatible model. Import one in the model panel.")
-    if execution_mode == "gpu" and mode not in NEURAL_MODES:
-        raise HTTPException(status_code=400, detail="GPU inference requires a named neural model. Choose Auto or CPU for approximation or custom ONNX.")
+    if execution_mode in {"gpu", "hybrid"} and mode not in NEURAL_MODES:
+        raise HTTPException(status_code=400, detail="NVIDIA GPU and GPU + CPU modes require a named neural model. Choose Auto or CPU for approximation or custom ONNX.")
     if mode in NEURAL_MODES:
         try:
             DEPTH_ENGINE.validate(mode, execution_mode=execution_mode)
@@ -1330,8 +1448,8 @@ async def calibration(file: UploadFile = File(...), depth_mode: str = Form('dept
         if not 1 <= budget_seconds <= 30:
             raise HTTPException(status_code=400, detail='Choose a calibration time budget from 1 to 30 seconds.')
         validate_depth_mode(depth_mode, execution_mode)
-        payload = await file.read(24 * 1024 * 1024 + 1)
-        if len(payload) > 24 * 1024 * 1024:
+        payload = await file.read(CALIBRATION_UPLOAD_BYTES + 1)
+        if len(payload) > CALIBRATION_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail='The calibration frame exceeds 24 MB.')
         return await run_in_threadpool(process_calibration, payload, depth_mode, execution_mode, budget_seconds)
     except ValueError as exc:
@@ -1351,7 +1469,7 @@ async def upload_model(model: UploadFile = File(...)) -> dict[str, Any]:
         with candidate.open("wb") as target:
             while chunk := await model.read(1024 * 1024):
                 total += len(chunk)
-                if total > 2 * 1024 * 1024 * 1024:
+                if total > MAX_MODEL_UPLOAD_BYTES:
                     target.close()
                     candidate.unlink(missing_ok=True)
                     raise HTTPException(status_code=413, detail="The model file is larger than 2 GB.")
@@ -1362,7 +1480,7 @@ async def upload_model(model: UploadFile = File(...)) -> dict[str, Any]:
     finally:
         await model.close()
     try:
-        loaded = cv2.dnn.readNetFromONNX(str(candidate))
+        loaded = await run_in_threadpool(cv2.dnn.readNetFromONNX, str(candidate))
         del loaded
     except cv2.error as exc:
         candidate.unlink(missing_ok=True)
@@ -1388,13 +1506,18 @@ async def create_job(
     purpose: str = Form("export"),
     clip_start_seconds: float = Form(0.0),
     clip_duration_seconds: float = Form(3.0),
-    output_name_template: Any = Form(DEFAULT_OUTPUT_NAME_TEMPLATE), request: Request = None,
+    output_name_template: Any = Form(DEFAULT_OUTPUT_NAME_TEMPLATE),
+    expected_source_sha256: str | None = Form(None), request: Request = None,
 ) -> dict[str, Any]:
     filename = Path((file.filename or "input").replace("\\", "/")).name
     extension = Path(filename).suffix.lower()
     if purpose not in {'export', 'preview_clip'}:
         await file.close()
         raise HTTPException(status_code=400, detail='Choose export or preview_clip as job purpose.')
+    if expected_source_sha256 is not None and (
+            purpose != 'export' or re.fullmatch(r'[0-9a-f]{64}', expected_source_sha256) is None):
+        await file.close()
+        raise HTTPException(status_code=400, detail='Saved-project source identity must be a lowercase SHA-256 for an ordinary export.')
     if purpose == 'export':
         # FastAPI applies a Form default to an explicitly empty field. Inspect
         # the already parsed form so an empty supplied template is rejected.
@@ -1464,6 +1587,8 @@ async def create_job(
                         input_path.unlink(missing_ok=True)
                         raise HTTPException(status_code=413, detail="The media file is larger than 8 GB.")
                     target.write(chunk)
+            if expected_source_sha256 is not None and digest.hexdigest() != expected_source_sha256:
+                raise HTTPException(status_code=409, detail='This source no longer matches the saved project. Locate the verified source again.')
         except BaseException:
             if staged_owned:
                 try:
@@ -1645,9 +1770,10 @@ def cancel_job(job_id: str) -> dict[str, Any]:
             return public_job_locked(job)
         proc = job.process
     stop_process(proc)
-    set_job(job_id, message="Canceling local conversion")
     with JOB_QUEUE.lock, JOBS_LOCK:
         current = JOBS[job_id]
+        if current.state not in {"completed", "failed", "canceled"}:
+            current.message = "Canceling local conversion"
         return public_job_locked(current)
 
 
