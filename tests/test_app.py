@@ -296,7 +296,7 @@ class AppTests(unittest.TestCase):
             video_args=('libx264',), software_fallback_args=('libx264',),
             hardware_available=False,
         )
-        with patch.object(main, 'FFMPEG_PATH', str(Path(main.__file__))), patch.object(main.cv2, 'VideoCapture', return_value=Capture()), patch.object(main, 'ffprobe_fps', return_value=24), patch.object(main.subprocess, 'Popen', return_value=Process()), patch.object(main, 'select_encoder_profile', return_value=cpu_profile), patch.object(main, 'estimate_depth', side_effect=infer):
+        with patch.object(main, 'FFMPEG_PATH', str(Path(main.__file__))), patch.object(main, 'open_video_capture', return_value=Capture()), patch.object(main, 'ffprobe_fps', return_value=24), patch.object(main.subprocess, 'Popen', return_value=Process()), patch.object(main, 'select_encoder_profile', return_value=cpu_profile), patch.object(main, 'estimate_depth', side_effect=infer):
             with self.assertRaises(main.JobCancelled):
                 main.run_video(job, None)
 
@@ -383,7 +383,7 @@ class AppTests(unittest.TestCase):
         fallback_job = self.video_job()
         with patch.object(main, 'FFMPEG_PATH', str(Path(main.__file__))), \
              patch.dict(main.JOBS, {job.id: job, fallback_job.id: fallback_job}), \
-             patch.object(main.cv2, 'VideoCapture', side_effect=lambda _path: Capture()), \
+             patch.object(main, 'open_video_capture', side_effect=lambda *_args, **_kwargs: Capture()), \
              patch.object(main, 'ffprobe_fps', return_value=24), \
              patch.object(main.subprocess, 'Popen', side_effect=popen), \
              patch.object(main, 'estimate_depth', return_value=np.full((46, 66), .5, np.float32)), \

@@ -59,7 +59,7 @@ Processing device choices:
 - **Auto** uses GPU depth if usable and overlaps the CPU video stages. If the GPU
   cannot run the model, it uses CPU depth and reports the reason.
 - **GPU + CPU / hybrid** requires the NVIDIA DirectML adapter for neural depth:
-  CPU decode/resize, NVIDIA inference, then CPU refinement, temporal filtering, stereo
+  software decode/resize (or optional AMD decode), NVIDIA inference, then CPU refinement, temporal filtering, stereo
   rendering and FFmpeg encoding. Two bounded queues preserve frame order. GPU failures
   are reported instead of silently switching neural inference to CPU.
 - **NVIDIA GPU** also requires the NVIDIA adapter and reports depth-inference failures.
@@ -93,7 +93,7 @@ which encoder actually produced each export. `Fast` favors shorter encoding time
 The strongest speed controls are the depth model, neural input detail, source
 resolution, and video length. Start with Depth Anything V2 Small; lower input detail
 often reduces inference work, while 518 can preserve more fine depth detail. The
-fastest size depends on source shape and runtime: on this GTX 1650 Ti, 15 warmed
+fastest size depends on source shape and runtime. Before the static-shape optimization, 15 warmed
 Small-model runs on a 240x400 source measured GPU medians of 0.133/0.181/0.263 s at
 256/384/518 px, while CPU medians were 0.277/0.205/0.401 s. Treat these as one
 workload, not a universal ranking. `Up to 1080p` caps large sources; `Match source`
@@ -114,7 +114,7 @@ over two seconds, then reports remaining time, measured FPS and elapsed time fro
 actual job. The estimate adapts as the conversion runs; short clips, still images and
 videos without a reliable frame count do not get a fabricated remaining time.
 
-On this GTX 1650 Ti, a 100-frame Small-model test measured warmed median inference
+Before static-shape optimization, a 100-frame Small-model test on this GTX measured warmed median inference
 of .214 s on GPU versus .414 s on CPU, for one 400x240 synthetic source (518x308
 model input). Profiling contained DirectML and CPU kernel events. The highest
 sampled whole-device memory reading was 302 MiB; this is not a universal peak or
@@ -136,6 +136,7 @@ Media stays on the local server. Only model installation contacts Hugging Face. 
 | Engine | Download | License | Runtime |
 |---|---:|---|---|
 | Depth Anything V2 Small | 99 MB | Apache-2.0 | CPU/DirectML GPU; recommended for 4 GB cards |
+| Depth Anything V2 Small FP16 | 49.6 MB | Apache-2.0 | Optional reduced-precision weights; slower than optimized FP32 in the local GTX test |
 | Depth Anything V2 Base | 389 MB | CC-BY-NC-4.0 | CPU/DirectML GPU; non-commercial weights |
 | Depth Anything V2 Large | 1.34 GB | CC-BY-NC-4.0 | DirectML attempted at 4 GB with 518 px cap; Auto can fall back to CPU |
 | DPT Hybrid / MiDaS | 533 MB | Apache-2.0, Intel upstream | CPU/DirectML GPU; 384 px inference |
@@ -441,3 +442,70 @@ StereoLab verifies its full content before making it ready. The server checks th
 fingerprint again while staging the upload, so changed content is rejected before
 queue admission. Keep the original media separately; projects do not copy or retain
 source files, and persistent video-depth caching remains planned.
+
+### Neural video speed options — 21 October 2026
+
+DirectML sessions now lock the actual input tensor dimensions using named free
+dimension overrides. A changed aspect ratio or input detail replaces the single
+resident session. The GPU path derives a versioned, hash-verified local graph
+with cubic ONNX Resize nodes changed to linear; upstream weights remain intact.
+The variant and both hashes appear in execution metadata. This interpolation
+change can change depth: the Small-model sample had normalized depth MAE 0.00785
+against the original. Model-derived variants consume additional model-cache disk
+space. Update the selected environment from its requirements file for the new
+`onnx` dependency, then restart the app.
+
+Named neural video models now smooth depth and detect cuts at network-output
+resolution before upsampling. Edge refinement still uses the full source image.
+In **Fine tuning → Video depth cadence**, choose **Alternate frames + optical
+flow** to infer frames 1, 3, 5… and warp depth for intervening frames with CPU DIS
+flow. Cuts, size changes, invalid flow and poor alignment trigger fresh depth.
+Every source frame is still rendered and encoded. Flow is opt-in: moving edges,
+occlusions and newly revealed objects can lose depth detail. The queue reports
+actual neural/flow counts; images always use one estimate.
+
+The model picker also offers separately installed **Small FP16** weights. Its
+49,642,442-byte file is pinned to the same upstream revision as Small, with its
+own hash and acceptance check. FP16 was slower on this GTX/DirectML workload, so
+FP32 remains recommended. The model's external input is float32 even though its
+weights use FP16; preprocessing follows the graph's declared input type.
+
+**Fine tuning → Video decoder → AMD graphics** explicitly requests FFmpeg
+D3D11VA on a detected physical AMD DXGI adapter. Adapter 0 worked on this laptop;
+the code discovers the ordinal instead of assuming it. Startup failure falls
+back to software and reports why. Midstream decode errors fail the job. Software
+remains the default: three 120-frame 720p H.264 decode pairs measured median full
+wall times of 0.534 s (OpenCV) and 0.924 s (AMD), including equal hashing work,
+startup and cleanup. GPU downloads can outweigh decoding savings. AMD/software
+pixels also differed (MAE 1.03/255), so they do not have byte parity.
+
+Matched complete exports on the GTX 1650 Ti, three repeats per variant:
+
+| Variant | Median export wall time |
+|---|---:|
+| Original dynamic FP32 and full-size temporal filter | 4.323 s |
+| Static/linear FP32 and native-size temporal filter | 1.602 s |
+| Same FP32 path with alternate-frame flow | 1.150 s |
+| Static/linear FP16 and native-size temporal filter | 2.597 s |
+
+These were synthetic 24-frame 640×360, 12 FPS sources, 256 px requested neural
+detail, 1280×360 SBS output, software decode/libx264 encode and warmed model
+sessions. All 12 outputs decoded to 24 frames at 12 FPS with identical decoded
+audio. Each flow run used 12 neural and 12 flow frames. Pixels differ between
+quality-changing paths; these measurements do not establish real-footage quality
+or sustained whole-film speed. Reproduce with
+`.\.venv-gpu\Scripts\python.exe scripts/verify_neural_speed.py`.
+
+A separate five-repeat warm Small inference profile at 252×420 input measured
+149.9 ms dynamic, 39.9 ms static and 31.7 ms static/linear. Static profiles had no
+recorded CPU-provider kernel events in this sample; this does not prove zero CPU
+work for every model/shape. FP16 static/linear measured 73.4 ms. The temporal-only
+microbenchmark measured 96.5 ms at 1080p versus 4.0 ms at 252×448; resizing,
+inference, refinement and rendering are outside that filter measurement.
+`scripts/benchmark_directml_variants.py` and `scripts/verify_amd_decoder.py` retain
+their raw reports under `.runtime/`, as does the complete-export script.
+
+Runtime references: [DirectML shape guidance](https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html),
+[ONNX Resize modes](https://onnx.ai/onnx/operators/onnx__Resize.html),
+[pinned FP16 source](https://huggingface.co/onnx-community/depth-anything-v2-small/blob/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model_fp16.onnx),
+[FFmpeg hardware acceleration](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options).

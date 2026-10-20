@@ -21,7 +21,8 @@ DEST.mkdir(parents=True, exist_ok=True)
 OriginalOptions = ort.SessionOptions
 
 class ProfiledManager(ModelManager):
-    def _new_session(self, path, provider='CPUExecutionProvider', device_id=None):
+    def _new_session(self, path, provider='CPUExecutionProvider', device_id=None, input_dimensions=None,
+                     model_precision=None):
         # Add profiling to the production factory without changing its policy.
         def options():
             value = OriginalOptions()
@@ -29,7 +30,8 @@ class ProfiledManager(ModelManager):
             value.profile_file_prefix = str(DEST / f'{provider}-{uuid.uuid4().hex}')
             return value
         with patch.object(ort, 'SessionOptions', options):
-            return super()._new_session(path, provider=provider, device_id=device_id)
+            return super()._new_session(path, provider=provider, device_id=device_id,
+                                        input_dimensions=input_dimensions, model_precision=model_precision)
 
 m = ProfiledManager(ROOT/'.runtime/models')
 frame = cv2.imread(str(ROOT/'.runtime/verification/source.png'))

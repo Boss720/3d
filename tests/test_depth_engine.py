@@ -52,6 +52,15 @@ class EngineTest(unittest.TestCase):
         self.manager = ModelManager(self.tmp)
         self.runtime = patch.object(self.manager, 'runtime_info', return_value={'available': True, 'error': None})
         self.runtime.start()
+        # Runtime policy tests use intentionally invalid bytes; graph transformation
+        # itself is covered against real ONNX graphs in test_onnx_optimization.
+        def fake_graph(model_id):
+            path = self.manager._path(model_id)
+            return path, {'derived_sha256': self.manager._hash(path),
+                          'input': {'name': 'pixel_values', 'shape': [1, 3, 'height', 'width'], 'type': 'tensor(float)'}}
+        graph_patch = patch.object(self.manager, '_gpu_graph', side_effect=fake_graph)
+        graph_patch.start()
+        self.addCleanup(graph_patch.stop)
 
     def tearDown(self):
         self.runtime.stop()
@@ -73,7 +82,7 @@ class EngineTest(unittest.TestCase):
 
     def test_catalog_covers_models_and_restricts_noncommercial_weights(self):
         catalog = self.manager.catalog()
-        self.assertEqual(len(catalog['models']), 4)
+        self.assertEqual(len(catalog['models']), 5)
         self.assertEqual(catalog['models'][0]['state'], 'not_installed')
         for entry in catalog['models']:
             self.assertEqual(len(entry['sha256']), 64)
@@ -109,6 +118,23 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(float(depth.min()), 0.)
         self.assertEqual(float(depth.max()), 1.)
         self.assertGreater(depth[-1, -1], depth[0, 0])
+
+    def test_float16_input_uses_actual_model_tensor_type(self):
+        session = FakeSession()
+        session.input.type = 'tensor(float16)'
+        depth = self.manager._predict_with_session(session, np.zeros((8, 16, 3), np.uint8), SMALL, 256)
+        self.assertEqual(session.blob.dtype, np.float16)
+        self.assertEqual(depth.dtype, np.float32)
+
+    def test_native_api_preserves_output_resolution_and_metadata(self):
+        self.accepted(SMALL)
+        with patch.object(self.manager, '_new_session', return_value=FakeSession()):
+            frame = np.zeros((32, 48, 3), np.uint8)
+            depth, info = self.manager.predict_native_with_info(frame, SMALL, 256, 'cpu')
+            self.assertEqual(depth.shape, (2, 2))
+            self.assertEqual((float(depth.min()), float(depth.max())), (0., 1.))
+            self.assertTrue(info['inference_succeeded'])
+            self.assertEqual(self.manager.predict(frame, SMALL, 256, 'cpu').shape, (32, 48))
 
     def test_midas_uses_384_and_half_normalization(self):
         session = FakeSession()
@@ -146,6 +172,20 @@ class EngineTest(unittest.TestCase):
             self.assertIn(spec['revision'], opened.call_args.args[0].full_url)
             self.assertEqual(self.manager._path(SMALL).read_bytes(), data)
             self.assertFalse(list(self.manager._path(SMALL).parent.glob('*.part')))
+
+    def test_fp16_catalog_and_install_use_pinned_variant(self):
+        model_id = 'depth-anything-v2-small-fp16'
+        original = MODEL_SPECS[model_id]
+        self.assertEqual(original['size'], 49642442)
+        self.assertEqual(original['sha256'], '2df6223f206b5164e21f664ace61dabeb9bb6a49b8b5a3e00510b4807d0f5b04')
+        data = b'validated fp16 model'
+        spec = dict(original, size=len(data), sha256=hashlib.sha256(data).hexdigest())
+        with patch.dict(MODEL_SPECS, {model_id: spec}), patch('depth_engine.urllib.request.urlopen', return_value=FakeResponse(data)) as opened, patch.object(self.manager, '_new_session', return_value=FakeSession()):
+            self.manager._download(model_id)
+            self.assertTrue(self.manager._accepted(model_id))
+            self.assertTrue(opened.call_args.args[0].full_url.endswith('/onnx/model_fp16.onnx'))
+            self.assertEqual(self.manager._public(model_id)['precision'], 'float16')
+            self.assertFalse(self.manager._public(model_id)['recommended'])
 
     def test_bad_download_hash_preserves_existing_accepted_cache(self):
         path = self.accepted(SMALL, b'good model')
@@ -197,6 +237,14 @@ class EngineTest(unittest.TestCase):
         self.assertFalse(self.manager.available(SMALL))
         self.assertEqual(self.manager._public(SMALL)['state'], 'failed')
 
+    def test_gpu_graph_rejects_corrupted_source_before_loading_parser(self):
+        path = self.accepted(SMALL, b'good model')
+        path.write_bytes(b'evil model')
+        with self.assertRaisesRegex(RuntimeError, 'SHA256'):
+            ModelManager._gpu_graph(self.manager, SMALL)
+        self.assertFalse(self.manager._accepted(SMALL))
+        self.assertEqual(self.manager._public(SMALL)['state'], 'failed')
+
     def test_malformed_acceptance_receipt_is_not_accepted(self):
         self.accepted(SMALL)
         self.manager._receipt(SMALL).write_text('[]')
@@ -240,7 +288,10 @@ class EngineTest(unittest.TestCase):
         expected = {'schema_version': 1, 'named_models_directml': True,
                     'gpu_max_input_dimension': 924, 'large_limited_gpu_max_input_dimension': 518,
                     'limited_gpu_memory_mb': 4096, 'unknown_memory_policy': 'limited',
-                    'gpu_failure_cooldown_seconds': 60, 'gpu_retry_supported': True}
+                    'gpu_failure_cooldown_seconds': 60, 'gpu_retry_supported': True,
+                    'directml_static_input_dimensions': True, 'directml_resize_policy': 'cubic_to_linear',
+                    'directml_graph_transform_version': 'directml-linear-resize-v1',
+                    'fp16_small_model': True, 'native_depth_output': True}
         hardware = {'selected_adapter': None, 'adapters': [], 'error': None}
         ort = SimpleNamespace(get_available_providers=lambda: ['CPUExecutionProvider'], __version__='fake')
         with patch('depth_engine.probe_hardware', return_value=hardware):
@@ -521,6 +572,18 @@ class EngineTest(unittest.TestCase):
             self.manager.predict(np.zeros((8, 8, 3), np.uint8), SMALL, execution_mode='cpu')
             self.assertEqual(len(sessions), 2)
 
+    def test_gpu_session_cache_rebuilds_for_actual_tensor_shape_only(self):
+        self.accepted(SMALL)
+        with patch.object(self.manager, 'runtime_info', return_value=self.gpu_runtime()), patch.object(
+                self.manager, '_new_session', side_effect=lambda path, **kw: FakeSession(provider='DmlExecutionProvider')) as created:
+            self.manager.predict(np.zeros((80, 160, 3), np.uint8), SMALL, 256, 'gpu')
+            self.assertEqual(created.call_args.kwargs['input_dimensions'], {'height': 126, 'width': 252})
+            self.manager.predict(np.zeros((160, 320, 3), np.uint8), SMALL, 256, 'gpu')
+            self.assertEqual(created.call_count, 1)
+            self.manager.predict(np.zeros((160, 160, 3), np.uint8), SMALL, 256, 'gpu')
+            self.assertEqual(created.call_count, 2)
+            self.assertEqual(created.call_args.kwargs['input_dimensions'], {'height': 252, 'width': 252})
+
     def test_unknown_execution_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'execution mode'):
             self.manager.validate(SMALL, execution_mode='magic')
@@ -546,19 +609,32 @@ class EngineTest(unittest.TestCase):
 
     def test_directml_session_options_are_sequential_and_memory_pattern_disabled(self):
         session = FakeSession(provider='DmlExecutionProvider')
-        options = SimpleNamespace()
+        overrides = {}
+        options = SimpleNamespace(add_free_dimension_override_by_name=lambda name, value: overrides.update({name: value}))
         ort = SimpleNamespace(SessionOptions=lambda: options,
                               ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL='sequential'),
                               GraphOptimizationLevel=SimpleNamespace(ORT_ENABLE_ALL='all'))
         from unittest.mock import Mock
         ort.InferenceSession = Mock(return_value=session)
         with patch.object(self.manager, '_ort', return_value=ort):
-            self.manager._new_session(Path('unused.onnx'), provider='DmlExecutionProvider', device_id=1)
+            self.manager._new_session(Path('unused.onnx'), provider='DmlExecutionProvider', device_id=1, input_dimensions={'height': 252, 'width': 518})
+        self.assertEqual(overrides, {'height': 252, 'width': 518})
         self.assertEqual(options.execution_mode, 'sequential')
         self.assertFalse(options.enable_mem_pattern)
         self.assertFalse(options.enable_cpu_mem_arena)
         self.assertEqual(ort.InferenceSession.call_args.kwargs['providers'][0], ('DmlExecutionProvider', {'device_id': 1}))
         self.assertTrue(session.fallback_disabled)
+
+    def test_fp16_cpu_avoids_ort_all_precision_cast_optimizer_failure(self):
+        from unittest.mock import Mock
+        options = SimpleNamespace()
+        ort = SimpleNamespace(SessionOptions=lambda: options,
+                              ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL='sequential'),
+                              GraphOptimizationLevel=SimpleNamespace(ORT_ENABLE_ALL='all', ORT_ENABLE_EXTENDED='extended'),
+                              InferenceSession=Mock(return_value=FakeSession()))
+        with patch.object(self.manager, '_ort', return_value=ort):
+            self.manager._new_session(Path('fp16.onnx'), model_precision='float16')
+        self.assertEqual(options.graph_optimization_level, 'extended')
 
     def test_predict_with_info_keeps_concurrent_request_metadata_separate(self):
         from concurrent.futures import ThreadPoolExecutor

@@ -9,10 +9,10 @@ from stereo import LAYOUTS
 
 SETTINGS_SCHEMA_VERSION = 1
 SETTINGS_FIELDS = ('layout', 'strength', 'convergence', 'depth_mode', 'input_size', 'resolution',
-                   'quality', 'invert_depth', 'temporal_smoothing', 'edge_refinement', 'execution_mode')
+                   'quality', 'invert_depth', 'temporal_smoothing', 'edge_refinement', 'execution_mode', 'depth_interval', 'video_decode')
 _ENUMS = {'layout': set(LAYOUTS), 'depth_mode': {'balanced', 'precision'} | set(MODEL_SPECS),
           'resolution': {'source', '1080p'}, 'quality': {'fast', 'balanced', 'high'},
-          'execution_mode': {'auto', 'cpu', 'gpu', 'hybrid'}}
+          'execution_mode': {'auto', 'cpu', 'gpu', 'hybrid'}, 'video_decode': {'software', 'amd'}}
 _RANGES = {'strength': (0, 10), 'convergence': (0, 1), 'temporal_smoothing': (0, .9)}
 
 
@@ -21,8 +21,15 @@ def settings_snapshot(job) -> dict:
 
 
 def validate_settings(settings) -> dict:
+    # Existing v1 presets/projects/history predate the optional video cadence.
+    if type(settings) is dict and 'depth_interval' not in settings:
+        settings = {**settings, 'depth_interval': 1}
+    if type(settings) is dict and 'video_decode' not in settings:
+        settings = {**settings, 'video_decode': 'software'}
     if type(settings) is not dict or set(settings) != set(SETTINGS_FIELDS):
-        raise ValueError('Provide exactly all 11 export settings with no extra fields.')
+        raise ValueError('Provide all export settings with no extra fields.')
+    if type(settings['depth_interval']) is not int or settings['depth_interval'] not in {1, 2}:
+        raise ValueError('Depth interval must be the integer 1 or 2.')
     for name, choices in _ENUMS.items():
         if type(settings[name]) is not str or settings[name] not in choices:
             raise ValueError(f'Choose a supported {name.replace("_", " ")}.')

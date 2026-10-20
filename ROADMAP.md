@@ -162,6 +162,15 @@ unknown duration must remain visibly unknown. A paused queue has no promised fin
 
 Investigate inferring fewer frames and propagating depth with motion compensation and confidence checks. Reset at cuts and re-infer on uncertain motion. Keep disabled by default until evaluation succeeds; simple repeated depth maps can introduce trails and incorrect moving edges.
 
+Implemented an opt-in alternate-frame DIS flow path (21 October): native-depth
+smoothing before upsampling, cut/shape/flow rejection with fresh inference, and
+visible neural/flow counters. It preserves every output frame. Three synthetic
+24-frame GTX export repeats measured median 4.323 s for the original path,
+1.602 s with static/linear FP32 plus native filtering, and 1.150 s with flow.
+All outputs retained geometry, FPS and matching audio. Quality-changing pixels
+differ; real-footage cuts, pans and occlusions remain an acceptance gate before
+flow becomes a recommended default. See README and `scripts/verify_neural_speed.py`.
+
 **Acceptance:** publish speed/quality comparisons on cuts, pans and fast objects. A speed gain without acceptable temporal output does not qualify for release as a recommended preset.
 
 ### 1.6 Optional model-aware queue grouping — P2 / S–M
@@ -334,6 +343,17 @@ HDR, MV-HEVC/spatial export and subtitle depth placement each need a separate bo
 - **Learned hole filling:** require temporally stable, eye-consistent results and an explicit quality/speed/memory comparison; avoid per-eye hallucination differences.
 
 Do not adopt unconditional FP16, periodic cache purging, extra concurrent GPU sessions, or tiled inference as generic speed fixes. Each can change behavior or add overhead and needs backend-specific evidence. In particular, splitting an image can lose global depth consistency and introduce seams.
+
+21 October measured implementation: DirectML uses static actual input dimensions
+and a versioned cubic-to-linear graph variant with source/derived hashes. The
+local Small warm profile measured 149.9/39.9/31.7 ms for dynamic/static/static+linear;
+linear depth MAE was 0.00785 against the original. FP16 is available as a separate
+pinned Small model, but measured 73.4 ms with static+linear and remains optional.
+AMD D3D11VA decode is also an explicit option: adapter 0 completed real H.264
+decoding and joined its processes/readers, but three matched 120-frame 720p pairs
+took longer (0.924 s versus 0.534 s software, full wall including hashes), so
+software decoding stays default. These are bounded synthetic/device observations;
+broader model/shape, real-media quality, long-run memory and packaged checks remain.
 
 ## Delivery gates
 

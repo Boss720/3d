@@ -15,7 +15,7 @@ from job_queue import EditableJobQueue
 
 
 SETTINGS = ('layout', 'strength', 'convergence', 'depth_mode', 'input_size', 'resolution',
-            'quality', 'invert_depth', 'temporal_smoothing', 'edge_refinement', 'execution_mode')
+            'quality', 'invert_depth', 'temporal_smoothing', 'edge_refinement', 'execution_mode', 'depth_interval', 'video_decode')
 
 
 def snapshot(job):

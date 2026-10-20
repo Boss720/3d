@@ -58,8 +58,19 @@ class NamingJobTests(unittest.TestCase):
         self.assertEqual(public['output_name_template'], '{name}_{layout}')
         self.assertEqual(public['planned_output_name'], expected)
         self.assertIsNone(public['output_name'])
-        self.assertEqual(len(public['settings']), 11)
+        self.assertEqual(len(public['settings']), 13)
+        self.assertEqual(public['settings']['depth_interval'], 1)
+        self.assertEqual(public['settings']['video_decode'], 'software')
         self.assertNotIn('output_name_template', public['settings'])
+
+    def test_video_depth_options_are_validated_and_frozen_in_settings(self):
+        response = self.submit(depth_interval='2', video_decode='amd')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['settings']['depth_interval'], 2)
+        self.assertEqual(response.json()['settings']['video_decode'], 'amd')
+        for invalid in ({'depth_interval': '3'}, {'video_decode': 'unsupported'}):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(self.submit(**invalid).status_code, 400)
 
     def test_invalid_template_rejects_before_model_validation_or_application_upload(self):
         for template in ('../{name}', '{name!r}', '{model.path}', 'x' * 121, ''):

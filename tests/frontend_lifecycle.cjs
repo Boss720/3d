@@ -110,7 +110,7 @@ function fixture(storage = new Map()) {
   };`);
   vm.runInContext(source, context, {filename: 'static/app.js'});
   const app = context.lifecycle;
-  const defaults = {layoutSelect: 'SBS', depthMode: 'balanced', executionMode: 'cpu', modelSize: '384', strength: '5', convergence: '.5', temporalSmoothing: '.35', resolution: '1080p', quality: 'balanced', previewDetail: 'proxy', processedClipDuration: '3', calibrationBudget: '15', performancePreset: 'balanced'};
+  const defaults = {layoutSelect: 'SBS', depthMode: 'balanced', executionMode: 'cpu', modelSize: '384', strength: '5', convergence: '.5', temporalSmoothing: '.35', depthInterval: '1', videoDecode: 'software', resolution: '1080p', quality: 'balanced', previewDetail: 'proxy', processedClipDuration: '3', calibrationBudget: '15', performancePreset: 'balanced'};
   for (const [id, value] of Object.entries(defaults)) app.ui[id].value = value;
   app.ui.edgeRefinement.checked = true;
   app.ui.queueEmpty.querySelector('strong').textContent = 'A little empty, for now.';
@@ -251,6 +251,8 @@ async function run(scenario) {
     assert.equal(details.open,true,'Polling must preserve expanded estimate details');
     assert.equal(f.document.activeElement.dataset.focusKey,`${disclosureKey}-summary`,'Polling must restore focus to the disclosure summary');
   } else if (scenario === 'named-presets') {
+    app.ui.depthMode.value='depth-anything-v2-small-fp16';
+    app.ui.depthInterval.value='2';app.ui.videoDecode.value='amd';
     app.ui.savedPresetName.value='XREAL Films';app.ui.savedPresetFavorite.checked=true;app.saveNamedPreset();
     app.ui.savedPresetName.value='Desktop';app.ui.savedPresetFavorite.checked=false;app.saveNamedPreset();
     assert.equal(app.savedPresets().length,2);assert.equal(app.savedPresets()[0].name,'XREAL Films');
@@ -258,8 +260,11 @@ async function run(scenario) {
     assert.equal(app.ui.savedPresetSelect.children[2].textContent,'Desktop','Favorites sort before other saved presets');
     const saved=JSON.parse(f.storage.get('stereolab.namedPresets.v1'));
     assert.equal(saved.schema_version,1);assert.equal(saved.presets[0].settings.layout,app.ui.layoutSelect.value);
-    app.ui.strength.value='1';app.ui.savedPresetSelect.value='XREAL Films';app.selectNamedPreset();app.applyNamedPreset();
+    app.ui.strength.value='1';app.ui.depthInterval.value='1';app.ui.videoDecode.value='software';
+    app.ui.savedPresetSelect.value='XREAL Films';app.selectNamedPreset();app.applyNamedPreset();
     assert.equal(app.ui.strength.value,'5','Applying a saved preset restores its settings');
+    assert.equal(app.ui.depthInterval.value,'2');assert.equal(app.ui.videoDecode.value,'amd');
+    assert.equal(app.currentSettingsForPreset().input_size,384,'FP16 preserves selectable neural detail');
     assert.match(app.ui.savedPresetStatus.textContent,/No job was started/);
     const reopened=fixture(f.storage);assert.equal(reopened.app.savedPresets().length,2,'Saved presets persist across page sessions');
     app.ui.strength.value='6';app.ui.savedPresetName.value='xreal films';app.ui.savedPresetFavorite.checked=false;app.saveNamedPreset();

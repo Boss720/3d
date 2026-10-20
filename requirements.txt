@@ -4,3 +4,4 @@ python-multipart>=0.0.20,<1
 numpy>=1.26,<3
 opencv-python>=4.10,<6
 onnxruntime>=1.20.1,<2
+onnx>=1.17,<2

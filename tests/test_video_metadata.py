@@ -40,7 +40,8 @@ class VideoMetadataTests(unittest.TestCase):
         }
         capture.get.side_effect = lambda prop: (
             position_ms if prop == cv2.CAP_PROP_POS_MSEC else properties[prop])
-        frame = np.full((12, 16, 3), 100, np.uint8)
+        frame = np.full((int(height) if np.isfinite(height) and height > 0 else 12,
+                         int(width) if np.isfinite(width) and width > 0 else 16, 3), 100, np.uint8)
         capture.read.side_effect = [(True, frame.copy()) for _ in range(frames)] + [(False, None)]
         return capture
 
@@ -57,7 +58,7 @@ class VideoMetadataTests(unittest.TestCase):
         process.wait.side_effect = finalize
         with patch.object(main, 'FFMPEG_PATH', str(Path(main.__file__))), \
              patch.object(main, 'JOBS', {self.job.id: self.job}), \
-             patch.object(main.cv2, 'VideoCapture', return_value=capture), \
+             patch.object(main, 'open_video_capture', return_value=capture), \
              patch.object(main, 'ffprobe_fps', side_effect=lambda ffmpeg, source, fallback: fallback), \
              patch.object(main, 'select_encoder_profile', side_effect=changes.get('profile_error'),
                           return_value=profile), \
@@ -75,6 +76,32 @@ class VideoMetadataTests(unittest.TestCase):
                 self.assertIsNone(self.job.total_frames)
                 self.assertIsNone(self.job.public()['eta_seconds'])
                 capture.release.assert_called()
+
+    def test_neural_video_filters_native_depth_and_only_infers_alternate_frames(self):
+        self.job.depth_mode = 'depth-anything-v2-small'
+        self.job.depth_interval = 2
+        capture = self.capture(count=4, width=96, height=64, frames=4)
+        native = np.full((16, 24), .5, np.float32)
+        info = {'active_provider': 'DmlExecutionProvider', 'gpu_verified': True}
+        flow = Mock()
+        flow.calc.return_value = np.zeros((16, 24, 2), np.float32)
+        with patch.object(main.DEPTH_ENGINE, 'predict_native_with_info', return_value=(native, info)) as infer, \
+             patch.object(main.DEPTH_ENGINE, 'predict_with_info') as full_infer, \
+             patch('video_depth.cv2.DISOpticalFlow_create', return_value=flow):
+            self.run_video(capture)
+        self.assertEqual(infer.call_count, 2)
+        full_infer.assert_not_called()
+        self.assertEqual(self.job.frames_processed, 4)
+        self.assertEqual(self.job.execution['temporal_width'], 24)
+        self.assertEqual(self.job.execution['temporal_height'], 16)
+        self.assertEqual(self.job.execution['video_depth_stats']['flow_frames'], 2)
+        self.assertEqual(self.job.first_execution['video_depth_stats']['frames'], 1)
+
+    def test_decoder_cancellation_during_startup_keeps_cancellation_semantics(self):
+        with patch.object(main, 'FFMPEG_PATH', str(Path(main.__file__))), \
+             patch.object(main, 'open_video_capture', side_effect=main.DecoderCancelled('cancelled')):
+            with self.assertRaises(main.JobCancelled):
+                main.run_video(self.job, None)
 
     def test_approximate_frame_count_can_exceed_decoded_count_without_failing(self):
         capture = self.capture(count=31, fps=25, frames=30, position_ms=1160)

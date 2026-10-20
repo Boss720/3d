@@ -19,6 +19,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import cv2
@@ -41,6 +42,9 @@ RUNTIME_CAPABILITIES = {
     'large_limited_gpu_max_input_dimension': LARGE_4GB_GPU_MAX_INPUT_DIMENSION,
     'limited_gpu_memory_mb': LIMITED_GPU_MEMORY_MB, 'unknown_memory_policy': 'limited',
     'gpu_failure_cooldown_seconds': GPU_FAILURE_COOLDOWN_SECONDS, 'gpu_retry_supported': True,
+    'directml_static_input_dimensions': True, 'directml_resize_policy': 'cubic_to_linear',
+    'directml_graph_transform_version': 'directml-linear-resize-v1',
+    'fp16_small_model': True, 'native_depth_output': True,
 }
 
 
@@ -52,6 +56,15 @@ MODEL_SPECS = {
         "size": 99060839, "license": "Apache-2.0", "recommended": True,
         "upstream": "depth-anything/Depth-Anything-V2-Small",
         "description": "Recommended starting point for CPU or DirectML GPU. FP32 relative inverse depth; about 99 MB.",
+    },
+    "depth-anything-v2-small-fp16": {
+        "name": "Depth Anything V2 Small FP16", "repo": "onnx-community/depth-anything-v2-small",
+        "revision": "4472b7362082ad9968fee890ca0f1e5aca36b93d",
+        "sha256": "2df6223f206b5164e21f664ace61dabeb9bb6a49b8b5a3e00510b4807d0f5b04",
+        "size": 49642442, "license": "Apache-2.0", "recommended": False,
+        "filename": "model_fp16.onnx", "precision": "float16",
+        "upstream": "depth-anything/Depth-Anything-V2-Small",
+        "description": "Optional FP16 weights, about 49.6 MB. Reduced precision can change depth results; speed depends on the adapter and graph. CPU remains available.",
     },
     "depth-anything-v2-base": {
         "name": "Depth Anything V2 Base", "repo": "onnx-community/depth-anything-v2-base",
@@ -90,7 +103,8 @@ class ModelManager:
         self._threads: dict[str, threading.Thread] = {}
         self._session: Any = None
         self._session_id: str | None = None
-        self._session_key: tuple[str, str, str | None] | None = None
+        self._session_key: tuple[Any, ...] | None = None
+        self._gpu_graphs: dict[str, tuple[Path, dict[str, Any]]] = {}
         self._gpu_failures: dict[tuple[Any, ...], tuple[float, str]] = {}
         self._gpu_verified = False
         self._last_execution: dict[str, Any] = {
@@ -233,6 +247,7 @@ class ModelManager:
             state = {"state": "ready" if accepted else "not_installed", "progress": 100 if accepted else 0, "error": None}
         return {"id": model_id, "name": spec["name"], "description": spec["description"],
                 "license": spec["license"], "source_url": source, "size_mb": round(spec["size"] / 1_000_000, 1),
+                "precision": spec.get("precision", "float32"), "filename": spec.get("filename", "model.onnx"),
                 "recommended": spec["recommended"], "revision": spec["revision"], "sha256": spec["sha256"],
                 "upstream_url": f"https://huggingface.co/{spec['upstream']}",
                 "preprocessor_url": f"{source}/blob/{spec['revision']}/preprocessor_config.json", **state}
@@ -333,7 +348,7 @@ class ModelManager:
             with self._lock:
                 self._states[model_id] = {"state": "downloading", "progress": 0, "error": None}
             destination.parent.mkdir(parents=True, exist_ok=True)
-            url = f"https://huggingface.co/{spec['repo']}/resolve/{spec['revision']}/onnx/model.onnx"
+            url = f"https://huggingface.co/{spec['repo']}/resolve/{spec['revision']}/onnx/{spec.get('filename', 'model.onnx')}"
             request = urllib.request.Request(url, headers={"User-Agent": "LocalStereoConverter/2"})
             total = 0
             digest = hashlib.sha256()
@@ -362,7 +377,8 @@ class ModelManager:
                 self._session = None
                 self._session_id = None
                 self._session_key = None
-                session = self._new_session(partial)
+                session = (self._new_session(partial, model_precision='float16')
+                           if spec.get('precision') == 'float16' else self._new_session(partial))
                 self._predict_with_session(session, np.zeros((64, 64, 3), dtype=np.uint8), model_id, 518)
                 del session
                 receipt_temp.write_text(json.dumps({"sha256": spec["sha256"], "revision": spec["revision"]}), encoding="utf-8")
@@ -381,13 +397,21 @@ class ModelManager:
             with self._lock:
                 self._states[model_id] = {"state": "failed", "progress": 0, "error": str(exc)}
 
-    def _new_session(self, path: Path, provider: str = CPU_PROVIDER, device_id: int | None = None) -> Any:
+    def _new_session(self, path: Path, provider: str = CPU_PROVIDER, device_id: int | None = None,
+                     input_dimensions: dict[str, int] | None = None, model_precision: str | None = None) -> Any:
         ort = self._ort()
         options = ort.SessionOptions()
         options.intra_op_num_threads = max(1, min(4, os.cpu_count() or 1))
         options.inter_op_num_threads = 1
         options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # ORT 1.24 DirectML's CPU provider can fail in the ALL FP16 cast /
+        # SimplifiedLayerNorm optimizer. EXTENDED preserves CPU install checks
+        # and Auto fallback for the pinned FP16 export (verified with real bytes).
+        options.graph_optimization_level = (ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+                                            if provider == CPU_PROVIDER and model_precision == 'float16'
+                                            else ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
+        for name, value in (input_dimensions or {}).items():
+            options.add_free_dimension_override_by_name(name, value)
         if provider == GPU_PROVIDER:
             options.enable_mem_pattern = False
             options.enable_cpu_mem_arena = False
@@ -406,8 +430,8 @@ class ModelManager:
     def _input_size(session: Any, height: int, width: int, model_id: str, input_size: int, max_dimension: int | None = None,
                     enforce_supported: bool = True) -> tuple[int, int]:
         inputs = session.get_inputs()
-        if len(inputs) != 1 or len(inputs[0].shape) != 4 or inputs[0].type != "tensor(float)":
-            raise RuntimeError("Depth model must accept one float32 NCHW image tensor.")
+        if len(inputs) != 1 or len(inputs[0].shape) != 4 or inputs[0].type not in {"tensor(float)", "tensor(float16)"}:
+            raise RuntimeError("Depth model must accept one float32 or float16 NCHW image tensor.")
         shape = inputs[0].shape
         if isinstance(shape[0], int) and shape[0] != 1 or isinstance(shape[1], int) and shape[1] != 3:
             raise RuntimeError("Depth model must accept a batch of one RGB image.")
@@ -431,7 +455,7 @@ class ModelManager:
             raise RuntimeError("Depth model input dimensions exceed the supported size.")
         return out_h, out_w
 
-    def _predict_with_session(self, session: Any, frame: np.ndarray, model_id: str, input_size: int, max_dimension: int | None = None) -> np.ndarray:
+    def _predict_with_session(self, session: Any, frame: np.ndarray, model_id: str, input_size: int, max_dimension: int | None = None, *, native: bool = False) -> np.ndarray:
         height, width = frame.shape[:2]
         out_h, out_w = self._input_size(session, height, width, model_id, input_size, max_dimension)
         midas = model_id == "dpt-hybrid-midas"
@@ -441,6 +465,8 @@ class ModelManager:
         mean = np.array([0.5] * 3 if midas else [0.485, 0.456, 0.406], dtype=np.float32)
         std = np.array([0.5] * 3 if midas else [0.229, 0.224, 0.225], dtype=np.float32)
         blob = np.ascontiguousarray(np.transpose((values - mean) / std, (2, 0, 1))[None])
+        if session.get_inputs()[0].type == "tensor(float16)":
+            blob = blob.astype(np.float16)
         outputs = session.run(None, {session.get_inputs()[0].name: blob})
         if not outputs:
             raise RuntimeError("Depth model returned no output.")
@@ -452,13 +478,17 @@ class ModelManager:
             prediction = prediction[0]
         if prediction.ndim != 2 or not prediction.size or not np.isfinite(prediction).all():
             raise RuntimeError("Depth model must return one finite 2D depth map.")
-        depth = cv2.resize(prediction, (width, height), interpolation=cv2.INTER_CUBIC)
+        depth = prediction if native else cv2.resize(prediction, (width, height), interpolation=cv2.INTER_CUBIC)
         minimum, maximum = float(depth.min()), float(depth.max())
         # Both catalog families return relative inverse depth: high values are near.
         depth = (depth - minimum) / max(maximum - minimum, 1e-6)
         return np.ascontiguousarray(np.clip(depth, 0, 1), dtype=np.float32)
 
     def predict(self, frame_bgr: np.ndarray, model_id: str, input_size: int = 518, execution_mode: str = 'auto') -> np.ndarray:
+        return self._predict(frame_bgr, model_id, input_size, execution_mode)
+
+    def _predict(self, frame_bgr: np.ndarray, model_id: str, input_size: int,
+                 execution_mode: str, *, native: bool = False) -> np.ndarray:
         self.validate(model_id, execution_mode)
         if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3 or not frame_bgr.shape[0] or not frame_bgr.shape[1] or frame_bgr.dtype != np.uint8:
             raise ValueError("Depth inference needs a nonempty uint8 BGR image.")
@@ -476,10 +506,11 @@ class ModelManager:
                                         'source_width': frame_bgr.shape[1], 'source_height': frame_bgr.shape[0],
                                         'requested_input_width': None, 'requested_input_height': None,
                                         'input_width': None, 'input_height': None,
-                                        'input_size_limit': None, 'inference_succeeded': False}
+                                        'input_size_limit': None, 'inference_succeeded': False,
+                                        'graph_optimization': None, 'output_width': None, 'output_height': None}
             try:
                 try:
-                    depth = self._run(frame_bgr, model_id, input_size, provider, adapter)
+                    depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
                 except Exception as exc:
                     if provider != GPU_PROVIDER:
                         raise
@@ -495,7 +526,7 @@ class ModelManager:
                     if execution_mode in {'gpu', 'hybrid'}:
                         raise RuntimeError(reason) from exc
                     provider, adapter = CPU_PROVIDER, None
-                    depth = self._run(frame_bgr, model_id, input_size, provider, adapter)
+                    depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
                 if provider == GPU_PROVIDER:
                     self._gpu_verified = True
                     self._gpu_failures.pop(gpu_key, None)
@@ -504,7 +535,7 @@ class ModelManager:
                         'active_provider': provider, 'device': adapter['name'] if adapter else 'CPU',
                         'device_id': adapter['id'] if adapter else None, 'fallback_reason': reason,
                         'gpu_verified': provider == GPU_PROVIDER,
-                        'inference_succeeded': True,
+                        'inference_succeeded': True, 'output_width': depth.shape[1], 'output_height': depth.shape[0],
                         'cpu_nodes_possible': provider == GPU_PROVIDER,
                         'input_size_limit': self._gpu_input_limit(model_id, adapter) if provider == GPU_PROVIDER else None,
                     })
@@ -521,7 +552,31 @@ class ModelManager:
             depth = self.predict(frame_bgr, model_id, input_size, execution_mode)
             return depth, self.execution_info()
 
-    def _run(self, frame: np.ndarray, model_id: str, input_size: int, provider: str, adapter: dict[str, Any] | None) -> np.ndarray:
+    def predict_native_with_info(self, frame_bgr: np.ndarray, model_id: str, input_size: int = 518,
+                                 execution_mode: str = 'auto') -> tuple[np.ndarray, dict[str, Any]]:
+        """Normalized float32 depth at the network output resolution, atomically with metadata."""
+        with self._inference_lock:
+            depth = self._predict(frame_bgr, model_id, input_size, execution_mode, native=True)
+            return depth, self.execution_info()
+
+    def _verify_installed(self, model_id: str) -> None:
+        if self._hash(self._path(model_id)) != self._spec(model_id)['sha256']:
+            self._quarantine(self._receipt(model_id))
+            with self._lock:
+                self._states[model_id] = {'state': 'failed', 'progress': 0,
+                                          'error': 'Installed model failed SHA256 verification. Reinstall the model.'}
+            raise RuntimeError('Installed model failed SHA256 verification. Reinstall the model.')
+
+    def _gpu_graph(self, model_id: str) -> tuple[Path, dict[str, Any]]:
+        from onnx_optimization import prepare_directml_model
+        if model_id not in self._gpu_graphs:
+            self._verify_installed(model_id)
+            self._gpu_graphs[model_id] = prepare_directml_model(
+                self._path(model_id), self._spec(model_id)['sha256'], self._path(model_id).parent / 'optimized')
+        return self._gpu_graphs[model_id]
+
+    def _run(self, frame: np.ndarray, model_id: str, input_size: int, provider: str,
+             adapter: dict[str, Any] | None, *, native: bool = False) -> np.ndarray:
         input_limit = self._gpu_input_limit(model_id, adapter) if adapter else None
         with self._lock:
             self._last_execution.update({'attempted_provider': provider, 'input_size_limit': input_limit,
@@ -529,24 +584,42 @@ class ModelManager:
                                          'active_provider': None, 'device': adapter['name'] if adapter else 'CPU',
                                          'device_id': adapter['id'] if adapter else None})
         key = (model_id, provider, json.dumps(adapter, sort_keys=True, default=str) if adapter else None)
+        graph_info = None
+        session_path = self._path(model_id)
+        input_dimensions = None
+        if provider == GPU_PROVIDER:
+            session_path, graph_info = self._gpu_graph(model_id)
+            node = SimpleNamespace(**graph_info['input'])
+            descriptor = SimpleNamespace(get_inputs=lambda: [node])
+            actual_h, actual_w = self._input_size(descriptor, *frame.shape[:2], model_id, input_size, input_limit)
+            input_dimensions = {}
+            for name, value in zip(node.shape, (1, 3, actual_h, actual_w)):
+                if isinstance(name, str):
+                    if name in input_dimensions and input_dimensions[name] != value:
+                        raise RuntimeError('Conflicting ONNX input dimension names.')
+                    input_dimensions[name] = value
+            key += (graph_info['derived_sha256'], actual_h, actual_w)
         session_reused = self._session_key == key
         with self._lock:
             self._last_execution.update({'session_reused': session_reused,
                                          'session_initialization_seconds': 0.0,
-                                         'inference_pipeline_seconds': None})
+                                         'inference_pipeline_seconds': None,
+                                         'graph_optimization': copy.deepcopy(graph_info),
+                                         'output_resolution': 'native' if native else 'source'})
         if self._session_key != key:
             initialization_started = time.perf_counter()
             try:
                 self._session = None
                 self._session_id = None
                 self._session_key = None
-                if self._hash(self._path(model_id)) != self._spec(model_id)["sha256"]:
-                    self._quarantine(self._receipt(model_id))
-                    with self._lock:
-                        self._states[model_id] = {"state": "failed", "progress": 0, "error": "Installed model failed SHA256 verification. Reinstall the model."}
-                    raise RuntimeError("Installed model failed SHA256 verification. Reinstall the model.")
-                self._session = (self._new_session(self._path(model_id), provider=provider, device_id=adapter['id'])
-                                 if adapter else self._new_session(self._path(model_id)))
+                self._verify_installed(model_id)
+                if graph_info is not None and self._hash(session_path) != graph_info['derived_sha256']:
+                    self._gpu_graphs.pop(model_id, None)
+                    raise RuntimeError('Optimized model failed SHA256 verification; retry to regenerate it.')
+                self._session = (self._new_session(session_path, provider=provider, device_id=adapter['id'], input_dimensions=input_dimensions)
+                                 if adapter else (self._new_session(self._path(model_id), model_precision='float16')
+                                                  if self._spec(model_id).get('precision') == 'float16'
+                                                  else self._new_session(self._path(model_id))))
                 if hasattr(self._session, 'disable_fallback'):
                     self._session.disable_fallback()
                 if provider == GPU_PROVIDER and provider not in self._session.get_providers():
@@ -557,7 +630,7 @@ class ModelManager:
             finally:
                 with self._lock:
                     self._last_execution['session_initialization_seconds'] = max(0.0, time.perf_counter() - initialization_started)
-        requested_h, requested_w = self._input_size(self._session, *frame.shape[:2], model_id, input_size,
+        requested_h, requested_w = self._input_size(descriptor if graph_info else self._session, *frame.shape[:2], model_id, input_size,
                                                   enforce_supported=False)
         with self._lock:
             self._last_execution.update({'requested_input_width': requested_w, 'requested_input_height': requested_h,
@@ -567,7 +640,7 @@ class ModelManager:
             self._last_execution.update({'input_width': out_w, 'input_height': out_h})
         inference_started = time.perf_counter()
         try:
-            result = self._predict_with_session(self._session, frame, model_id, input_size, input_limit)
+            result = self._predict_with_session(self._session, frame, model_id, input_size, input_limit, native=native)
         finally:
             with self._lock:
                 self._last_execution['inference_pipeline_seconds'] = max(0.0, time.perf_counter() - inference_started)

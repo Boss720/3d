@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Annotated
 from urllib.parse import urlsplit
 
 import cv2
@@ -50,6 +50,8 @@ from resource_sampling import process_snapshot
 from stereo import StereoRenderer, TemporalDepthFilter, layout_size, refine_depth, render_output
 from video_encoder import select_encoder_profile
 from video_pipeline import PipelineCancelled, run_pipeline
+from video_depth import VideoDepthEstimator
+from video_decoder import DecoderCancelled, open_video_capture
 
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -72,7 +74,7 @@ VIDEO_EXTENSIONS = {
 }
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 LAYOUTS = {"SBS", "XREAL_SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"}
-NEURAL_MODES = {"depth-anything-v2-small", "depth-anything-v2-base", "depth-anything-v2-large", "dpt-hybrid-midas"}
+NEURAL_MODES = set(MODEL_SPECS)
 DEPTH_MODES = {"balanced", "precision"} | NEURAL_MODES
 EXECUTION_MODES = {"auto", "cpu", "gpu", "hybrid"}
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
@@ -121,7 +123,8 @@ FFMPEG_PATH = find_ffmpeg()
 _SOURCE_COMPONENTS = ('main.py', 'depth_engine.py', 'stereo.py', 'video_encoder.py',
                       'video_pipeline.py', 'preview_cache.py', 'telemetry.py', 'preflight.py',
                       'calibration.py', 'resource_sampling.py', 'preview_policy.py', 'preview_clip.py',
-                      'job_queue.py', 'job_settings.py', 'output_naming.py', 'job_history.py', 'local_workspace.py')
+                      'job_queue.py', 'job_settings.py', 'output_naming.py', 'job_history.py', 'local_workspace.py',
+                      'video_depth.py', 'video_decoder.py', 'onnx_optimization.py')
 APP_BUILD_FINGERPRINT = (hashlib.sha256(b''.join((ROOT / name).read_bytes() for name in _SOURCE_COMPONENTS)).hexdigest()
                          if all((ROOT / name).is_file() for name in _SOURCE_COMPONENTS) else None)
 JOBS: dict[str, "Job"] = {}
@@ -153,6 +156,9 @@ class Job:
     temporal_smoothing: float = 0.35
     edge_refinement: bool = True
     execution_mode: str = "auto"
+    depth_interval: int = 1
+    video_decode: str = 'software'
+    decoder: dict[str, Any] = field(default_factory=dict)
     execution: dict[str, Any] = field(default_factory=dict)
     first_execution: dict[str, Any] = field(default_factory=dict)
     pipeline: str = "sequential"
@@ -280,10 +286,13 @@ class Job:
             "edge_refinement": self.edge_refinement,
             "invert_depth": self.invert_depth,
             "execution_mode": self.execution_mode,
+            "depth_interval": self.depth_interval,
+            "video_decode": self.video_decode,
             "execution": dict(self.execution),
             "first_execution": dict(self.first_execution),
             "pipeline": self.pipeline,
             "encoder": self.encoder,
+            "decoder": dict(self.decoder),
             "eta_status": eta_status,
             "elapsed_seconds": elapsed_seconds,
             "processing_fps": processing_fps,
@@ -549,12 +558,22 @@ def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) 
     if not ffmpeg or not Path(ffmpeg).is_file():
         raise RuntimeError("FFmpeg was not found. Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.")
     source = job.preview_source_path or job.input_path
-    capture = cv2.VideoCapture(str(source))
     try:
+        capture = open_video_capture(source, ffmpeg, software_capture_factory=cv2.VideoCapture,
+                                     cancel_event=job.cancel_event, prefer_hardware=job.video_decode == 'amd')
+    except DecoderCancelled as exc:
+        raise JobCancelled() from exc
+    try:
+        info = getattr(capture, 'decoder_info', None)
+        if isinstance(info, dict):
+            set_job(job.id, decoder=dict(info))
         return run_video_capture(job, net, ffmpeg, source, capture, _force_software)
     finally:
         # Own the whole capture lifetime, including metadata and encoder setup.
         capture.release()
+        info = getattr(capture, 'decoder_info', None)
+        if isinstance(info, dict):
+            set_job(job.id, decoder=dict(info))
 
 
 def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Path,
@@ -619,6 +638,8 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
     try:
         reader.start()
         depth_filter = TemporalDepthFilter(job.temporal_smoothing)
+        native_estimator = (VideoDepthEstimator(job.depth_interval, job.temporal_smoothing)
+                            if job.depth_mode in NEURAL_MODES else None)
         renderer = StereoRenderer()
     except Exception:
         stop_process(proc)
@@ -651,8 +672,20 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         if job.cancel_event.is_set():
             raise JobCancelled()
         with job.timings.measure("depth"):
-            depth = estimate_depth(frame, job.depth_mode, net, job.input_size, job.invert_depth, job.execution_mode)
+            if native_estimator is not None:
+                def predict_native(source_frame):
+                    result, info = DEPTH_ENGINE.predict_native_with_info(
+                        source_frame, job.depth_mode, job.input_size, job.execution_mode)
+                    EXECUTION_LOCAL.snapshot = info
+                    return 1.0 - result if job.invert_depth else result
+                depth = native_estimator.process(frame, predict_native)
+            else:
+                depth = estimate_depth(frame, job.depth_mode, net, job.input_size, job.invert_depth, job.execution_mode)
         execution = execution_snapshot(job.depth_mode, job.execution_mode)
+        if native_estimator is not None:
+            execution.update({'video_depth_method': native_estimator.last_method,
+                              'video_depth_stats': dict(native_estimator.stats),
+                              'temporal_width': depth.shape[1], 'temporal_height': depth.shape[0]})
         set_job(job.id, execution=execution)
         if not job.first_execution:
             set_job(job.id, first_execution=dict(execution))
@@ -663,8 +696,11 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         if job.cancel_event.is_set():
             raise JobCancelled()
         with job.timings.measure("refinement_temporal"):
+            if native_estimator is not None:
+                depth = cv2.resize(depth, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_CUBIC)
             depth = refine_depth(frame, depth, job.edge_refinement)
-            depth = depth_filter.apply(frame, depth)
+            if native_estimator is None:
+                depth = depth_filter.apply(frame, depth)
         with job.timings.measure("render"):
             output_frame = renderer.render(frame, depth, job.strength, job.convergence, job.layout)
         if job.cancel_event.is_set():
@@ -729,7 +765,7 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
             raise RuntimeError("FFmpeg finished without producing an output file.")
         set_job(job.id, frames_processed=frame_index, total_frames=metadata_total_frames)
         return target
-    except PipelineCancelled as exc:
+    except (PipelineCancelled, DecoderCancelled) as exc:
         raise JobCancelled() from exc
     except (BrokenPipeError, OSError) as exc:
         stop_process(proc)
@@ -1508,8 +1544,16 @@ async def create_job(
     clip_duration_seconds: float = Form(3.0),
     output_name_template: Any = Form(DEFAULT_OUTPUT_NAME_TEMPLATE),
     expected_source_sha256: str | None = Form(None), request: Request = None,
+    depth_interval: Annotated[int, Form()] = 1,
+    video_decode: Annotated[str, Form()] = 'software',
 ) -> dict[str, Any]:
     filename = Path((file.filename or "input").replace("\\", "/")).name
+    if type(depth_interval) is not int or depth_interval not in {1, 2}:
+        await file.close()
+        raise HTTPException(status_code=400, detail="Choose depth on every frame or alternate frames (1 or 2).")
+    if video_decode not in {'software', 'amd'}:
+        await file.close()
+        raise HTTPException(status_code=400, detail="Choose software or AMD video decoding.")
     extension = Path(filename).suffix.lower()
     if purpose not in {'export', 'preview_clip'}:
         await file.close()
@@ -1616,6 +1660,8 @@ async def create_job(
             temporal_smoothing=temporal_smoothing,
             edge_refinement=edge_refinement,
             execution_mode=execution_mode,
+            depth_interval=depth_interval,
+            video_decode=video_decode,
             purpose=purpose,
             clip_start_seconds=clip_start_seconds,
             clip_duration_seconds=clip_duration_seconds,
