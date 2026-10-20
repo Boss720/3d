@@ -235,6 +235,8 @@ class TemporalDepthFilter:
     def apply(self, frame: np.ndarray, depth: np.ndarray) -> np.ndarray:
         shape = _frame_size(frame)
         current = _bounded_depth(depth, shape)
+        if self.amount == 0:
+            return current
         if self.amount > 0 and self._previous_frame is not None and self._previous_frame.shape == frame.shape:
             difference = np.max(cv2.absdiff(frame, self._previous_frame), axis=2).astype(np.float32) / 255.0
             scene_cut = float(difference.mean()) > .24 or float(np.mean(difference > .18)) > .65

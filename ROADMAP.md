@@ -121,6 +121,15 @@ Cache a selected frame's inferred depth independently from stereo rendering. Str
 
 Profile buffer allocations, array copies, remap-grid construction, color conversion, resizing, and unused eye synthesis for DEPTH/RGBD output. Reuse shape-dependent buffers where ownership is safe. Keep queues bounded and preserve ordered temporal state.
 
+Implemented fast path: when temporal smoothing is zero, return the bounded,
+independent depth buffer without copying the source frame or retaining previous
+frame/depth history. `scripts/benchmark_temporal_history.py` compares the prior
+copy behavior with the fast path. Three 1080p filter runs of 120 applications
+measured medians of 1.873 and 1.335 seconds (28.7% lower); three matched 36-frame
+CPU XREAL exports measured 4.406 and 4.349 seconds (1.3% lower), with identical
+encoded files, decoded frames and audio. This is synthetic local evidence, not a
+neural, GPU or general-workload speed claim.
+
 Next targets: job-owned reusable coordinate grids and rendering buffers in
 `make_eye_pair()`, followed by XREAL packing into a reusable combined canvas to
 avoid intermediate eye canvases and concatenation. Scope buffers to their owner

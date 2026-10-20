@@ -422,6 +422,13 @@ approximation/XREAL export pairs showed a local median of 2.300 versus 2.088 sec
 this is not a promised gain for other footage or GPU inference. See
 [measurement scope and raw evidence](output/reviews/render-optimization-2026-10-20.md).
 
+When temporal smoothing is zero, the video path also skips unused history copies.
+In three matched synthetic CPU exports, the median fell from 4.406 to 4.349 seconds
+with identical encoded files, decoded frames and audio. A 1080p filter microbenchmark
+showed a 28.7% lower median for that filter stage. Reproduce both measurements with
+`scripts/benchmark_temporal_history.py`; these local synthetic results do not predict
+neural/GPU or general-footage speed.
+
 ### Saved projects
 
 Use **Save project** to download a portable `.stereolab-project.json` containing the

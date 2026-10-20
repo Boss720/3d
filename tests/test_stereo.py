@@ -209,6 +209,19 @@ class TemporalTests(unittest.TestCase):
         small = np.ones((4, 6), dtype=np.float32)
         np.testing.assert_array_equal(temporal.apply(self.frame[:4, :6], small), small)
 
+    def test_zero_smoothing_skips_frame_copy_and_retains_no_history(self):
+        class CopyForbiddenFrame(np.ndarray):
+            def copy(self, *args, **kwargs):
+                raise AssertionError('disabled smoothing must not copy a frame for history')
+
+        frame = self.frame.view(CopyForbiddenFrame)
+        temporal = TemporalDepthFilter(0)
+        result = temporal.apply(frame, self.low)
+        np.testing.assert_array_equal(result, self.low)
+        self.assertFalse(np.shares_memory(result, self.low))
+        self.assertIsNone(temporal._previous_frame)
+        self.assertIsNone(temporal._previous_depth)
+
 
 if __name__ == '__main__':
     unittest.main()
