@@ -11,6 +11,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -22,6 +23,7 @@ import traceback
 import uuid
 
 import httpx
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = 'depth-anything-v2-small'
@@ -101,10 +103,64 @@ def media_record(ffmpeg, path):
                            capture_output=True, text=True, check=True, timeout=30,
                            creationflags=subprocess.CREATE_NO_WINDOW)
     require(video and audio, f'Empty decoded audio/video in {path}')
-    return {'encoded_sha256': digest(path), 'bytes': path.stat().st_size,
+    return {'path': str(path), 'encoded_sha256': digest(path), 'bytes': path.stat().st_size,
             'decoded_video_sha256': hashlib.sha256(video).hexdigest(),
             'decoded_video_bytes': len(video), 'decoded_audio_sha256': hashlib.sha256(audio).hexdigest(),
             'decoded_audio_bytes': len(audio), 'probe': json.loads(probe.stdout)}
+
+
+def compare_repeat_media(ffmpeg, first, repeat, *, allow_hardware_variation=False):
+    """Keep exact audio/geometry/timing; optionally measure lossy encode variation.
+
+    A hardware encoder can vary despite identical raw input. The opt-in bound
+    is 60 dB PSNR for EVERY frame (RMS <= 0.255 in 8-bit RGB channels), rather
+    than an aggregate score that could hide a changed frame. This is a media
+    similarity check, not proof of identical raw rendered frames.
+    """
+    require(first['decoded_audio_sha256'] == repeat['decoded_audio_sha256']
+            and first['decoded_audio_bytes'] == repeat['decoded_audio_bytes'],
+            'Repeated output audio changed.')
+    videos = [next(s for s in item['probe']['streams'] if s['codec_type'] == 'video')
+              for item in (first, repeat)]
+    for field in ('width', 'height', 'nb_read_frames', 'avg_frame_rate', 'start_time', 'duration'):
+        require(videos[0].get(field) == videos[1].get(field), f'Repeated video {field} changed.')
+    audios = [next((s for s in item['probe']['streams'] if s['codec_type'] == 'audio'), None)
+              for item in (first, repeat)]
+    require(all(audio is not None for audio in audios), 'Repeated output audio stream is missing.')
+    for field in ('start_time', 'duration', 'sample_rate', 'channels', 'channel_layout'):
+        require(audios[0].get(field) == audios[1].get(field), f'Repeated audio {field} changed.')
+    require(first['probe'].get('format', {}).get('duration') == repeat['probe'].get('format', {}).get('duration'),
+            'Repeated container duration changed.')
+    require(first['decoded_video_bytes'] == repeat['decoded_video_bytes'], 'Repeated video length changed.')
+    encoded_equal = first['encoded_sha256'] == repeat['encoded_sha256']
+    video_equal = first['decoded_video_sha256'] == repeat['decoded_video_sha256']
+    result = {'encoded_identical': encoded_equal, 'decoded_video_identical': video_equal,
+              'decoded_audio_identical': True}
+    if encoded_equal and video_equal:
+        return result
+    require(allow_hardware_variation, 'Repeated encoding differs; hardware variation was not enabled.')
+    if video_equal:
+        return result
+    decoded = [ffmpeg_run(ffmpeg, ['-i', item['path'], '-map', '0:v:0', '-an',
+                                  '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'])
+               for item in (first, repeat)]
+    require(len(decoded[0]) == len(decoded[1]) == first['decoded_video_bytes'],
+            'Repeated decoded video size changed during comparison.')
+    frame_bytes = int(videos[0]['width']) * int(videos[0]['height']) * 3
+    require(frame_bytes > 0 and len(decoded[0]) == frame_bytes * int(videos[0]['nb_read_frames']),
+            'Repeated decoded frame geometry is invalid.')
+    scores = []
+    for offset in range(0, len(decoded[0]), frame_bytes):
+        arrays = [np.frombuffer(data, dtype=np.uint8, count=frame_bytes, offset=offset)
+                  for data in decoded]
+        difference = arrays[0].astype(np.float32) - arrays[1]
+        mse = float(np.mean(difference * difference, dtype=np.float64))
+        score = None if mse == 0 else 10 * math.log10(255 ** 2 / mse)
+        require(score is None or score >= 60, f'Repeated frame {len(scores)} exceeds hardware variation bound: {score} dB')
+        scores.append(score)
+    result.update({'per_frame_psnr_db': scores, 'minimum_psnr_db': 60,
+                   'scope': 'Lossy output similarity only; raw render identity requires separate evidence.'})
+    return result
 
 
 class Verifier:
@@ -412,11 +468,13 @@ console.log(JSON.stringify({performed:true,widths,errors,default_cache_off:true,
                 and execution.get('gpu_verified') is False and execution.get('depth_cache_hit') is True
                 and execution.get('cached_execution', {}).get('active_provider') == 'DmlExecutionProvider',
                 f'Cached execution provenance is inaccurate: {execution}')
-        for key in ('encoded_sha256', 'decoded_video_sha256', 'decoded_audio_sha256'):
-            require(first_media[key] == second_media[key], f'Same settings repeat differs: {key}')
+        hardware_variation = (self.args.allow_hardware_encode_variation
+                              and first.get('encoder') == second.get('encoder') == 'NVIDIA NVENC')
+        comparison = compare_repeat_media(self.args.ffmpeg, first_media, second_media,
+                                          allow_hardware_variation=hardware_variation)
         self.report['media_comparison'] = {'first': first_media, 'cached_repeat': second_media}
         self.check('cached_cpu_provenance_honest')
-        self.check('cached_encoded_decoded_audio_identical')
+        self.check('cached_repeat_media', comparison)
         self.check('verified_source_reupload')
         _, variant_media = self.submit('second-cache-entry', temporal_smoothing='0.20')
         inventory = self.request('GET', '/api/depth-cache').json()
@@ -438,7 +496,11 @@ console.log(JSON.stringify({performed:true,widths,errors,default_cache_off:true,
         require(self.request('GET', '/api/depth-cache').json() == inventory, 'Cache inventory did not survive restart.')
         replay, replay_media = self.submit('after-restart-reupload', expected_source_sha256=digest(self.source))
         require(replay['depth_cache']['state'] == 'hit', 'Restart reupload did not reuse saved cache.')
-        require(replay_media['encoded_sha256'] == first_media['encoded_sha256'], 'Restart cached output changed.')
+        comparison = compare_repeat_media(
+            self.args.ffmpeg, first_media, replay_media,
+            allow_hardware_variation=(self.args.allow_hardware_encode_variation
+                                      and first.get('encoder') == replay.get('encoder') == 'NVIDIA NVENC'))
+        self.check('restart_repeat_media', comparison)
         self.check('exact_owned_exe_process_restart')
         self.check('history_output_source_identity_persist')
         self.check('depth_cache_restart_reuse')
@@ -466,6 +528,8 @@ def main():
     parser.add_argument('--job-timeout', type=float, default=600)
     parser.add_argument('--clean-path', action='store_true',
                         help='Launch the EXE with a minimal child PATH plus the explicit FFmpeg directory.')
+    parser.add_argument('--allow-hardware-encode-variation', action='store_true',
+                        help='For NVENC only, allow lossy variation at >=60 dB PSNR per frame; audio/timing remain exact.')
     parser.add_argument('--node', type=Path)
     parser.add_argument('--playwright', type=Path)
     parser.add_argument('--chrome', type=Path, default=Path('C:/Program Files/Google/Chrome/Application/chrome.exe'))

@@ -1,5 +1,17 @@
 # StereoLab handoff — 21 October 2026
 
+## Current beta.2 review checkpoint
+
+This section supersedes the older beta.1 publication status and candidate identities below. Live GitHub inspection confirmed beta.1 was already public. The owner has now authorized review/fixes, rebuilt binaries, a scoped commit/push, and a new beta release.
+
+The current wave fixes late pipeline cancellation, custom-model candidate cleanup, and missing GPU hardware code in the build fingerprint. It adds isolated build paths, updates installer defaults to `0.2.0-beta.2`, fixes the FFmpeg 9 rotation fixture, and makes hardware-encoding variation an explicit measured verifier option. See `RELEASE_NOTES.md`.
+
+Evidence is local under `.runtime/review-release-beta2/`: CPU/GPU full suites each run 628 tests (7/3 skips); packaged `acceptance-final/report.json` passes strict Small DirectML, generated XREAL SBS, cache/restart/history, static hashes and browser checks. `final-media-postcheck.json` verifies exact audio timing/format and video timing; the final repeats were byte-identical. `source-parity/report.json` separately proves identical eight-frame fresh/cache raw render hashes. `nvenc-timing-analysis/` records independent intermittent lossy-encoding variation. Installer install, hash comparison, HTTP launch and uninstall passed in `installer-acceptance.json`.
+
+The selected EXE is `.runtime/review-release-beta2/dist/StereoLab.exe`; embedded source fingerprint `26d8375445e80934d4ba230d8cfa2f1b499a650c4e96e857da096905326ef86a` covers 27 modules. Release assets and checksums are assembled in `.runtime/stereolab-release-candidate-0.2.0-beta.2/`. Existing user processes, output review archives and local PROGRESS changes are preserved.
+
+This remains a beta with the previously documented clean-machine, physical-device, screen-reader and dependency review limits. No production-readiness or third-party relicensing claim is made.
+
 The owner has requested a new release and directed broad public reuse; original
 StereoLab source and documentation are now under MIT in the root `LICENSE`.
 Public binary publication still waits on third-party dependency notices and

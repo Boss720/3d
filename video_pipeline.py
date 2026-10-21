@@ -168,13 +168,25 @@ def run_pipeline(
     finally:
         if not completed_inference:
             stop.set()
-        if (stop.is_set() or cancel_event.is_set()) and on_stop is not None:
-            try:
-                on_stop()
-            except BaseException as error:
-                fail(error)
+        io_stopped = False
+
+        def stop_owned_io():
+            nonlocal io_stopped
+            if not io_stopped and (stop.is_set() or cancel_event.is_set()) and on_stop is not None:
+                io_stopped = True
+                try:
+                    on_stop()
+                except BaseException as error:
+                    fail(error)
+
+        stop_owned_io()
         for worker in started:
-            worker.join()
+            # Cancellation can arrive after EOF while the final encoder write
+            # is still blocked. Keep the I/O stop hook reachable during joins.
+            while worker.is_alive():
+                stop_owned_io()
+                worker.join(timeout=_POLL_SECONDS)
+        stop_owned_io()
 
     if failures:
         raise failures[0]

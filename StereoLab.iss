@@ -1,7 +1,7 @@
 ; Local per-user installer for the StereoLab beta.
 ; Third-party notice and redistribution review must be completed before public release.
 #ifndef AppVersion
-#define AppVersion "0.2.0-beta.1"
+#define AppVersion "0.2.0-beta.2"
 #endif
 #ifndef PackageDir
 #define PackageDir "dist"

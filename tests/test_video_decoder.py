@@ -424,8 +424,11 @@ class GeneratedMediaTests(unittest.TestCase):
         frames, capture = self.frames(source)
         self.assertEqual(len(frames), 5)
         self.assertEqual(capture.probe['total_frames'], 5)
-        self.command(['-i', str(source), '-c', 'copy', '-metadata:s:v:0', 'rotate=90', str(rotated)])
+        # Set the display matrix explicitly; recent FFmpeg versions no longer
+        # translate a rotate metadata tag into stream display side data.
+        self.command(['-display_rotation:v:0', '90', '-i', str(source), '-c', 'copy', str(rotated)])
         metadata = probe_video(rotated, self.ffmpeg)
+        self.assertEqual(metadata['rotation_degrees'], 90, 'Rotation fixture must carry a display matrix')
         rotated_frames, capture = self.frames(rotated)
         self.assertEqual((metadata['width'], metadata['height']), (32, 64))
         self.assertEqual(len(rotated_frames), 5)

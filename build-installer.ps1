@@ -1,6 +1,6 @@
 param(
     [string]$PackageDir = (Join-Path $PSScriptRoot 'dist'),
-    [string]$AppVersion = '0.2.0-beta.1'
+    [string]$AppVersion = '0.2.0-beta.2'
 )
 
 $ErrorActionPreference = 'Stop'

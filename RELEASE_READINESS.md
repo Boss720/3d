@@ -1,5 +1,15 @@
 # Production release readiness
 
+## Current beta.2 review — 21 October 2026
+
+The owner authorized a new beta release after review and fixes. Live GitHub inspection confirms beta.1 is already public; older statements below about beta.1 remaining private are historical. Beta publication does not establish production readiness.
+
+The beta.2 source wave passes 628 tests in both CPU and DirectML environments (7 and 3 skips), with `ResourceWarning` treated as an error. FFmpeg 9 and sibling FFprobe were configured, including actual rotated-media decoding. The packaged EXE passed real Small DirectML inference and generated 3840x1080 XREAL SBS, cache/restart/history and rendered browser checks. Installer install/launch/uninstall and installed file hashes passed in an isolated directory on this host.
+
+Evidence: `.runtime/review-release-beta2/{cpu-final.log,gpu-final.log,acceptance-final/report.json,final-media-postcheck.json,installer-acceptance.json}`. Fresh/cache raw-render identity is independently recorded in `source-parity/report.json`. Intermittent identical-input FFmpeg/NVENC variation was reproduced in `nvenc-timing-analysis/`; the verifier optionally measures each frame against a 60 dB PSNR floor while requiring exact audio, geometry, frame count and timing. Its default remains byte identity. The final packaged repeats were also byte-identical.
+
+The new embedded source fingerprint is `26d8375445e80934d4ba230d8cfa2f1b499a650c4e96e857da096905326ef86a` (27 modules, now including `gpu_hardware.py`). Review `RELEASE_NOTES.md` for fixes. The pre-existing third-party dependency review, clean-machine, physical XREAL 1S, and actual screen-reader evidence gaps below remain open; this wave does not claim those checks passed.
+
 Updated 21 October 2026. **Release readiness is not yet established.** The public
 v0.1.0 remains a beta. This checklist records release requirements separately
 from optional roadmap features.

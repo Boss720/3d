@@ -1,5 +1,9 @@
 # Release dependency and license inventory
 
+## Beta.2 artifact update — 21 October 2026
+
+The owner requested the reviewed beta.2 release. Its 97 native DLL/PYD entries are byte-identical to the published beta.1 artifact; this updates original application code, its build manifest and packaging only. The embedded MIT license matches the repository, and the 27-module manifest matches current source. Evidence: `.runtime/review-release-beta2/package-audit.json`. Native attribution/provenance and notice review below remains applicable and is not closed by this comparison. Current assets and SHA-256 checksums are assembled under `.runtime/stereolab-release-candidate-0.2.0-beta.2/`.
+
 Generated 2026-10-21 using `D:\Users\Hp\Documents\ChatGPT\3d\.venv-gpu\Scripts\python.exe` distribution metadata.
 Python: `3.12.10` (Windows-11-10.0.22000-SP0).
 

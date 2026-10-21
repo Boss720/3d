@@ -1822,28 +1822,30 @@ async def upload_model(model: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Choose an ONNX model file (.onnx).")
     candidate = MODELS / f"{uuid.uuid4()}.onnx"
     total = 0
+    candidate_owned = False
     try:
-        with candidate.open("wb") as target:
-            while chunk := await model.read(1024 * 1024):
-                total += len(chunk)
-                if total > MAX_MODEL_UPLOAD_BYTES:
-                    target.close()
-                    candidate.unlink(missing_ok=True)
-                    raise HTTPException(status_code=413, detail="The model file is larger than 2 GB.")
-                target.write(chunk)
-    except Exception:
-        candidate.unlink(missing_ok=True)
-        raise
+        try:
+            with candidate.open("xb") as target:
+                candidate_owned = True
+                while chunk := await model.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > MAX_MODEL_UPLOAD_BYTES:
+                        raise HTTPException(status_code=413, detail="The model file is larger than 2 GB.")
+                    target.write(chunk)
+        finally:
+            await model.close()
+        try:
+            loaded = await run_in_threadpool(cv2.dnn.readNetFromONNX, str(candidate))
+            del loaded
+        except cv2.error as exc:
+            raise HTTPException(status_code=400, detail=f"OpenCV could not load this ONNX model: {exc}") from exc
+        os.replace(candidate, MODEL_PATH)
+        return {"ok": True, "model_available": True, "model_name": Path(model.filename or "depth.onnx").name, "bytes": total}
     finally:
-        await model.close()
-    try:
-        loaded = await run_in_threadpool(cv2.dnn.readNetFromONNX, str(candidate))
-        del loaded
-    except cv2.error as exc:
-        candidate.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=f"OpenCV could not load this ONNX model: {exc}") from exc
-    os.replace(candidate, MODEL_PATH)
-    return {"ok": True, "model_available": True, "model_name": Path(model.filename or "depth.onnx").name, "bytes": total}
+        # A canceled copy, rejected model, or failed atomic publication must not
+        # strand a large private candidate in the protected models directory.
+        if candidate_owned:
+            candidate.unlink(missing_ok=True)
 
 
 def reserve_job_upload(input_path: Path) -> None:
