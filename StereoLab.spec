@@ -13,7 +13,11 @@ manifest_path = Path(CONF['workpath']) / MANIFEST_NAME
 manifest_path.parent.mkdir(parents=True, exist_ok=True)
 manifest_path.write_text(json.dumps(build_manifest(Path(SPECPATH)), sort_keys=True), encoding='utf-8')
 
-datas = [("static", "static"), (str(manifest_path), '.')]
+datas = [
+    ("static", "static"),
+    (str(manifest_path), '.'),
+    (str(Path(SPECPATH) / "LICENSE"), '.'),
+]
 binaries = collect_dynamic_libs("onnxruntime")
 hiddenimports = ["onnxruntime.capi.onnxruntime_pybind11_state", "python_multipart"]
 hiddenimports += collect_submodules("uvicorn")

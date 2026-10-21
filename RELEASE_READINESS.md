@@ -4,6 +4,20 @@ Updated 21 October 2026. **Release readiness is not yet established.** The publi
 v0.1.0 remains a beta. This checklist records release requirements separately
 from optional roadmap features.
 
+The published v0.1.0 release points to commit `71c6d6e` and its Windows EXE was
+published before the root MIT license was added. The build spec embeds
+`LICENSE`, and the build script copies it beside the EXE. A private replacement
+candidate was built at `.runtime/mit-license-packaging-20261021-01/dist/`:
+98,572,977 bytes, SHA-256
+`6776ba55a960d817c6e26f3a125dbc49f399f967435633c4e310fd1663943b45`. The exact
+1,064-byte MIT file is embedded and hash-matched; the extraction comparison is
+retained at `.runtime/mit-license-packaging-20261021-01/license-package-audit.json`.
+Packaged generated XREAL SBS
+acceptance passed on the exact candidate; report:
+`.runtime/mit-license-packaging-20261021-01/acceptance-retry-01/report.json`.
+The public v0.1.0 binary remains unchanged; this private candidate is not yet
+approved for publication.
+
 ## Verified in the current source wave
 
 - Latest full-suite rerun against current source: CPU `617` tests, `10` skips;
@@ -172,9 +186,9 @@ module after build-path filename normalization. This additional comparison
 does not change the runtime manifest's coverage.
 
 The current private Windows candidate is
-`.runtime/vfr-wave/frontend-a11y-final-20261021/dist/StereoLab.exe`,
-98,573,106 bytes, SHA-256
-`4635b66f6c1a377bb08b93c65e7e8700af64bca8039ac0215a8a45b28e30ac4c`.
+`.runtime/mit-license-packaging-20261021-01/dist/StereoLab.exe`,
+98,572,977 bytes, SHA-256
+`6776ba55a960d817c6e26f3a125dbc49f399f967435633c4e310fd1663943b45`.
 Its embedded Python-source fingerprint matches:
 `8e56afce8aa2240e94a07f27bc093186939dd3ed0302c72976a51baa76d9e2fe`. That
 fingerprint covers the Python components listed in `build_identity.py`, not

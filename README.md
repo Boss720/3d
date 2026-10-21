@@ -55,6 +55,10 @@ its pinned size/SHA-256 and inference checks pass. Clean-Windows first-run behav
 is still under release review; see `RELEASE_READINESS.md`.
 
 Prebuilt Windows beta downloads are published on the [GitHub Releases page](https://github.com/Boss720/3d/releases).
+The existing `v0.1.0` binary predates the MIT license file and does not carry
+that notice. New packaged builds include the license in the executable and as
+a companion file; the next release still requires the dependency and model
+review below.
 
 ## Screenshots
 

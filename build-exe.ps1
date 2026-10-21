@@ -15,4 +15,9 @@ if ($LASTEXITCODE -ne 0) {
 & $gpuPython -m PyInstaller --clean --noconfirm StereoLab.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed to build StereoLab.exe." }
 
+$licenseSource = Join-Path $PSScriptRoot "LICENSE"
+$licenseDestination = Join-Path $PSScriptRoot "dist\LICENSE"
+Copy-Item -LiteralPath $licenseSource -Destination $licenseDestination -Force
+
 Write-Host "Built $PSScriptRoot\dist\StereoLab.exe"
+Write-Host "Copied $licenseDestination"

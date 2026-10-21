@@ -6,6 +6,10 @@ StereoLab source and documentation are now under MIT in the root `LICENSE`.
 That grant does not cover third-party dependencies or model weights and does
 not approve publication of a new executable, version, or release.
 
+The existing public v0.1.0 binary predates the root MIT license and does not
+carry that notice. `StereoLab.spec` now embeds `LICENSE`; `build-exe.ps1` also
+copies it beside a fresh build. The old public binary has not been replaced.
+
 ## Source checkpoint and scope
 
 - Repository: `D:\Users\Hp\Documents\ChatGPT\3d`; `master`; remote: `https://github.com/Boss720/3d.git`.
@@ -35,9 +39,9 @@ results. The former long handoff is retained locally at
 
 | Identity | Value |
 | --- | --- |
-| EXE | `.runtime/vfr-wave/frontend-a11y-final-20261021/dist/StereoLab.exe` |
-| Size | 98,573,106 bytes |
-| SHA-256 | `4635b66f6c1a377bb08b93c65e7e8700af64bca8039ac0215a8a45b28e30ac4c` |
+| EXE | `.runtime/mit-license-packaging-20261021-01/dist/StereoLab.exe` |
+| Size | 98,572,977 bytes |
+| SHA-256 | `6776ba55a960d817c6e26f3a125dbc49f399f967435633c4e310fd1663943b45` |
 | Embedded source fingerprint | `8e56afce8aa2240e94a07f27bc093186939dd3ed0302c72976a51baa76d9e2fe` |
 
 The runtime fingerprint covers the 26 Python files declared in
@@ -58,6 +62,7 @@ under `.runtime/vfr-wave/frontend-a11y-final-20261021/`.
 
 | Evidence | Result and retained report |
 | --- | --- |
+| MIT license package | Exact root license bytes are embedded and match the 1,064-byte source file (SHA-256 `a4de0c3dea2553b4f07daf7b5ace3e299498db724d575da3438f8e7d530a31b2`); sidecar copy matches. Reproducible extraction and hash evidence: `.runtime/mit-license-packaging-20261021-01/license-package-audit.json`. New 183-entry archive adds `LICENSE`; all 97 native entries and 22 third-party notice entries match the prior candidate. The 155 `base_library.zip` members also match by content. Isolated generated XREAL SBS/Small DirectML package acceptance passed: `.runtime/mit-license-packaging-20261021-01/acceptance-retry-01/report.json`. |
 | Packaged pipeline/cache/restart | Named Small DirectML inference, cached CPU provenance, encoded/decoded/audio parity, source reupload, history/output identity, cache reuse and selected cleanup: `acceptance/report.json`. |
 | Generated XREAL file | 3840x1080 SBS, eight decoded frames and audio: `acceptance-xreal/report.json`; sample: `acceptance-xreal/first-output.mp4`. No physical playback observed. |
 | Two-hour generated neural export | 7,200/7,200 strict Small DirectML frames; complete video/audio decode with aligned starts; 349.5 seconds wall time, 23 clean resource samples: `acceptance-synthetic-soak-normal/report.json`. |
@@ -125,8 +130,9 @@ Python 3.12 results do not transfer to it.
 
 1. Reconcile pinned model terms, including non-commercial Base/Large and Xenova
    conversion rights, against the intended executable/model delivery.
-2. Resolve dependency provenance/notice scope and approve complete delivery
-   materials for the chosen exact candidate. Current drafts are review inputs.
+2. Rebuild the exact selected source and verify the packaged MIT license, then
+   resolve dependency provenance/notice scope and approve complete delivery
+   materials. Current drafts are review inputs.
 3. Observe the final artifact on a clean standard Windows account or machine,
    with supplied FFmpeg, fresh model acceptance/download, generated outputs,
    retrieval/restart and shutdown. Local VM/Sandbox discovery did not provide
