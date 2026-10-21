@@ -2,13 +2,21 @@ buymeacoffee.com/bosscube194
 
 # StereoLab
 
-StereoLab is a Windows app that turns photos and videos into 3D side-by-side (SBS) files. It estimates which parts of a picture are near or far, then shifts the image slightly to make separate views for your left and right eyes. Results are an approximate 3D effect; inspect the preview before exporting.
+StereoLab turns photos and videos into side-by-side 3D. It estimates which parts are near or far and makes a view for each eye. Results are approximate, so check the preview before exporting.
 
-**Beta download:** Windows downloads on the [GitHub Releases page](https://github.com/Boss720/3d/releases) are beta software. The existing `v0.1.0` download was published before this repository added its MIT license notice. A newer private build exists but has not been published. Do not assume a new licensed release is available yet.
+## Screenshots
+
+These show the app using a generated illustration. The preview uses Visual approximation, not a neural depth model.
+
+![StereoLab studio with the source viewer, model and stereo controls, and export queue](static/screenshots/stereolab-studio.png)
+
+![StereoLab side-by-side stereo preview of the sample illustration](static/screenshots/stereolab-stereo-preview.png)
+
+**Download:** Get the Windows beta from the [GitHub Releases page](https://github.com/Boss720/3d/releases). The current version is `v0.2.0-beta.1`. The older `v0.1.0` download predates the repository's MIT license notice.
 
 ## Quick start (from source)
 
-You need Windows and Python 3.10 or newer. In PowerShell, open this project folder and run:
+For a source install, use Windows and Python 3.10 or newer. In PowerShell, run:
 
 ```powershell
 python -m venv .venv
@@ -16,26 +24,19 @@ python -m venv .venv
 .\run.ps1
 ```
 
-Then open [http://127.0.0.1:8765](http://127.0.0.1:8765) in your browser. The first neural depth model is downloaded only after you choose **Install** in the app. For a quick try without downloading a model, choose **Visual approximation**. Video conversion also needs FFmpeg; the app checks for it on `PATH`, in `VIDEO3D_FFMPEG`, or in its local helper location.
+Then open [http://127.0.0.1:8765](http://127.0.0.1:8765). Choose **Visual approximation** to try the app without downloading a model. Neural models download only when you choose **Install**. Video conversion needs FFmpeg.
 
 ## XREAL and side-by-side 3D, in plain English
 
-SBS means one wide video frame contains two views next to each other: the left-eye view on the left and the right-eye view on the right. An XREAL glasses display can show those views to the matching eyes to create a 3D impression. Pick the XREAL side-by-side layout when exporting for that viewing setup. Screen shape, player settings, and glasses model can affect playback; physical XREAL 1S playback has not been verified for this release.
+An SBS video puts the left-eye view and right-eye view beside each other in one wide frame. For XREAL glasses, choose the XREAL side-by-side layout when exporting. Physical playback on XREAL 1S has not been verified.
 
 ## License
 
-StereoLab's original source code and documentation are licensed under the MIT
-License; see [LICENSE](LICENSE). You may use, modify, and redistribute those
-materials, including commercially, while retaining the copyright and license
-notices. This license does not cover third-party software, model weights or
-exports, or FFmpeg; each keeps its own terms. In particular, the Base and Large
-depth models are marked non-commercial, and the rights for one published ONNX
-conversion remain unclear. Review [RELEASE_DEPENDENCIES.md](RELEASE_DEPENDENCIES.md)
-before redistributing model files or a packaged executable.
+StereoLab's original source and documentation use the [MIT License](LICENSE). Third-party software and model weights have their own terms. Base and Large models are marked non-commercial. See [RELEASE_DEPENDENCIES.md](RELEASE_DEPENDENCIES.md) before redistributing models or packaged builds.
 
 ## Windows executable
 
-Packaged users can download the beta from the [GitHub Releases page](https://github.com/Boss720/3d/releases); no installer is currently published. The executable runs the local web app; open [http://127.0.0.1:8765](http://127.0.0.1:8765). Depth models download only after an explicit Install action and are stored under `%LOCALAPPDATA%\StereoLab`; they are not bundled into the executable. The frozen app stores uploads and outputs in that same local-data folder. First launch can take longer while the one-file app unpacks, and Windows may show a warning because the executable is unsigned.
+Download either the standalone EXE or per-user setup installer from the [GitHub Releases page](https://github.com/Boss720/3d/releases). Models are not bundled; installed models, uploads, and outputs are stored under `%LOCALAPPDATA%\StereoLab`. First launch can take longer while the app unpacks, and Windows may warn that the executable is unsigned.
 
 To build from source, developers can run:
 
@@ -46,16 +47,7 @@ To build from source, developers can run:
 .\dist\StereoLab.exe
 ```
 
-Building the installer also requires Inno Setup 6. The setup/build commands are for developers; packaged users do not run them. Clean-Windows first-run behavior is still under release review; see [RELEASE_READINESS.md](RELEASE_READINESS.md). The existing `v0.1.0` binary predates the MIT license notice. A future packaged build includes the license inside the executable and as a companion file, but still needs the dependency and model review described above.
-## Screenshots
-
-The screenshots use a generated sample illustration. The processed preview shows
-StereoLab's visual-approximation mode, which uses image cues and is not a neural
-depth model.
-
-![StereoLab studio with the source viewer, model and stereo controls, and export queue](static/screenshots/stereolab-studio.png)
-
-![StereoLab side-by-side stereo preview of the sample illustration](static/screenshots/stereolab-stereo-preview.png)
+Building the installer also requires Inno Setup 6. For current test coverage and known limits, see [RELEASE_READINESS.md](RELEASE_READINESS.md).
 
 ## NVIDIA GTX GPU and CPU cooperation
 
