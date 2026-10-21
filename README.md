@@ -1,3 +1,5 @@
+buymeacoffee.com/bosscube194
+
 # StereoLab
 
 A local Windows workspace for converting photos and videos into stereoscopic 3D. This version adds downloadable neural depth models, real processed-frame previews, depth presets, temporal smoothing, and depth/RGB-D exports to the original clean-room prototype.
