@@ -1,9 +1,10 @@
 # StereoLab handoff — 21 October 2026
 
 **Release is not ready.** This checkpoint preserves the current source and
-private-candidate evidence. The owner has authorized committing and pushing the
-source to GitHub. A source push does not select a project license or approve
-publication of a new executable, version, or release.
+private-candidate evidence. The owner directed broad public reuse; original
+StereoLab source and documentation are now under MIT in the root `LICENSE`.
+That grant does not cover third-party dependencies or model weights and does
+not approve publication of a new executable, version, or release.
 
 ## Source checkpoint and scope
 
@@ -21,7 +22,8 @@ publication of a new executable, version, or release.
   cleanup, media-timing fixes, opt-in persistent neural depth reuse, frozen build
   identity, source relinking, and preview/queue accessibility improvements.
 - Owner scope is generated media only, targeting XREAL 1S. The owner currently
-  has no access to the glasses. No project source license has been chosen.
+  has no access to the glasses. The project source license is MIT; model and
+  dependency delivery terms remain under review.
 
 Start with `RELEASE_READINESS.md` for acceptance, `RELEASE_DEPENDENCIES.md` for
 candidate-specific dependency review, and `README.md` for use. `ROADMAP.md` is
@@ -121,8 +123,8 @@ Python 3.12 results do not transfer to it.
 
 ## Remaining release gates and resumption
 
-1. Obtain the owner's project-license and delivery-model choice; reconcile pinned
-   model terms, including non-commercial Base/Large and Xenova conversion rights.
+1. Reconcile pinned model terms, including non-commercial Base/Large and Xenova
+   conversion rights, against the intended executable/model delivery.
 2. Resolve dependency provenance/notice scope and approve complete delivery
    materials for the chosen exact candidate. Current drafts are review inputs.
 3. Observe the final artifact on a clean standard Windows account or machine,

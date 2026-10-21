@@ -4,6 +4,17 @@ buymeacoffee.com/bosscube194
 
 A local Windows workspace for converting photos and videos into stereoscopic 3D. This version adds downloadable neural depth models, real processed-frame previews, depth presets, temporal smoothing, and depth/RGB-D exports to the original clean-room prototype.
 
+## License
+
+StereoLab's original source code and documentation are licensed under the MIT
+License; see [LICENSE](LICENSE). You may use, modify, and redistribute those
+materials, including commercially, while retaining the copyright and license
+notices. This license does not cover third-party software, model weights or
+exports, or FFmpeg; each keeps its own terms. In particular, the Base and Large
+depth models are marked non-commercial, and the rights for one published ONNX
+conversion remain unclear. Review [RELEASE_DEPENDENCIES.md](RELEASE_DEPENDENCIES.md)
+before redistributing model files or a packaged executable.
+
 ## Run
 
 Python 3.10+ is required. From this folder:
