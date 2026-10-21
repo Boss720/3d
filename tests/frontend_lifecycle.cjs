@@ -63,11 +63,13 @@ function deferred() {
 const response = data => ({ok: true, json: async () => data});
 
 function fixture(storage = new Map()) {
+  const html = fs.readFileSync(path.join(__dirname, '../static/index.html'), 'utf8');
+  const actualIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
   const nodes = new Map(), timers = new Map(), calls = [], blobs = [];
   let nextTimer = 0, nextUuid = 0, fetchHandler = async url => response(url === '/api/models' ? {models: []} : {});
   const document = {
     activeElement: null,
-    getElementById(id) { if (!nodes.has(id)) { const node = new Element(); node.ownerDocument = this; nodes.set(id, node); } return nodes.get(id); },
+    getElementById(id) { if (!actualIds.has(id)) return null; if (!nodes.has(id)) { const node = new Element(); node.ownerDocument = this; nodes.set(id, node); } return nodes.get(id); },
     createElement(tagName) { const node = new Element(tagName); node.ownerDocument = this; return node; }, createTextNode(text) { return {textContent: text}; },
     querySelectorAll() { return []; }, querySelector() { return null; }, addEventListener() {},
   };
