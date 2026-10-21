@@ -28,6 +28,13 @@ class FrontendMarkupTests(unittest.TestCase):
         self.assertEqual(referenced - set(markup.ids), set(), 'Missing startup UI elements')
         self.assertEqual(len(markup.ids), len(set(markup.ids)), 'Duplicate HTML IDs')
 
+    def test_cinematic_controls_exist_in_real_page(self):
+        markup = MarkupIds((ROOT / 'static/index.html').read_text(encoding='utf-8'))
+        script = (ROOT / 'static/studio.js').read_text(encoding='utf-8')
+        referenced = set(re.findall(r"\$\('([^']+)'\)", script))
+        self.assertGreater(len(referenced), 15)
+        self.assertEqual(referenced - set(markup.ids), set(), 'Missing cinematic controls')
+
 
 if __name__ == '__main__':
     unittest.main()
