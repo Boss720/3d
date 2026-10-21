@@ -51,7 +51,7 @@ class VideoMetadataTests(unittest.TestCase):
         process = Mock()
         process.stdin = io.BytesIO()
         process.stderr = None
-        process.poll.return_value = 0
+        process.poll.return_value = None if changes.get('process_running') else 0
         def finalize(*args, **kwargs):
             main.output_path_for(self.job).write_bytes(b'encoded video')
             return 0
@@ -147,11 +147,14 @@ class VideoMetadataTests(unittest.TestCase):
 
     def test_stderr_reader_start_failure_stops_the_encoder(self):
         capture = self.capture(count=1)
+        def stop(proc):
+            proc.poll.return_value = 0
         with patch.object(main.threading.Thread, 'start', side_effect=RuntimeError('reader unavailable')), \
-             patch.object(main, 'stop_process') as stop:
+             patch.object(main, 'stop_process', side_effect=stop) as stop:
             with self.assertRaisesRegex(RuntimeError, 'reader unavailable'):
-                self.run_video(capture)
+                self.run_video(capture, process_running=True)
         stop.assert_called_once_with(self.job.process)
+        self.assertTrue(self.job.process.stdin.closed)
         capture.release.assert_called()
 
 

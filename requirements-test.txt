@@ -1,0 +1,6 @@
+# Complete runtime dependencies plus clients used by the unittest suite.
+-r requirements.txt
+
+# Starlette 1.9+ uses httpx2 for TestClient; some verification modules import httpx directly.
+httpx>=0.27,<1
+httpx2>=2.16,<3

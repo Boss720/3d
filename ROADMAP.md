@@ -27,6 +27,7 @@ finished. See PROGRESS.md and HANDOFF.md for dated commands, reports and limitat
 | 3.2 | Four exact performance presets, reset/dirty state, strict versioned JSON import/export, and up to 20 browser-local named presets with favorites | Broader accessibility and real-device validation |
 | 3.3 | Atomic pending-export reorder/remove/settings/naming, immutable snapshots, ready-file order/batch settings and names, source-aware retry/duplicate, per-file frozen readiness, tab-only notification opt-in and guarded keyboard shortcuts | Real browser/OS notification delivery and broader accessibility/device review; durable retry sources remain Phase 4 |
 | 4.1 | Opt-in metadata history integrated: worker/lease lifespan, streamed source hashes, durable admission/edits/lifecycle, prior-launch API/UI and downloads. Portable metadata-only project files now save queue order, per-source settings and preview time; exact source relinking is verified in a worker and again during upload admission | Real symlink and POSIX execution proof; broader real-media/device validation. Source retention and interrupted-job recovery remain separate work |
+| 4.2 | 21 October: opt-in exact float32 native temporal depth cache, content/model/runtime/frame identities, atomic completion, 2 GiB quota, cross-process leases, queue status and selected cleanup. Real Small CPU and GTX generated-media exports reused every depth map with zero inference on hits; same-settings write/hit encoded video, pixels and audio matched | Representative long films, VFR/media fidelity, clean-machine/packaged neural validation, storage tuning and POSIX execution evidence remain open; source relinking is still required |
 | 3.4 | Pause/resume between jobs, visible pending count, immediate cancellation while paused, shutdown wakeup and launch-local reset implemented; browser controls verified | Active-video pause and durable pause state are separate work |
 | 3.5 | Windows open-folder/reveal helpers and Save copy to an existing folder implemented; exclusive creation, partial-copy cleanup and original preservation tested. Browser copy verified byte-for-byte | Actual Explorer window behavior and packaged Windows validation remain open. Direct per-job conversion destinations require a history-format extension; current copies preserve managed originals and use extra space |
 | 3.6 | Managed usage by category, explicit inactive temporary-file selection and deletion, per-job cleanup retry, staged-upload/job protection and Windows lock handling implemented | Explicit output/model deletion and persistent depth-cache management remain future slices; junction rejection tested with stub, live symlink test unavailable without Windows privilege |
@@ -311,6 +312,18 @@ Build this alongside saved projects, with atomic cache completion, a bounded dis
 quota, hit/miss visibility and cleanup integration (3.6). Compare total first-export
 and rerender costs, including cache writes/reads, before recommending defaults.
 
+21 October implementation: the optional cache is now available for named-model
+ordinary video exports and defaults off. Exact post-temporal native float32 maps
+are stored before presentation/refinement, uncompressed under a 2 GiB quota.
+Content hashes, runtime/code identities and every decoded frame protect reuse;
+partial/corrupt entries are rejected, sequence mismatch restarts the entire export
+once with fresh inference, and failed/canceled writes are not published. Local
+storage provides explicit selected-entry cleanup, including inactive partials;
+OS leases protect active entries across app processes. Generated Small-model
+CPU and GTX runs verified complete same-settings write/hit encoded/pixel/audio
+parity and zero inference calls on hits. At the sampled native shape, 24 maps used
+about 3.24 MiB. Long real-media, VFR, POSIX and packaged gates remain open.
+
 ### 4.3 Chunked recovery — P2 / L
 
 Checkpoint at validated segment boundaries. Preserve timestamps, audio alignment and temporal context through overlap or saved state; finalize output atomically. Avoid claiming arbitrary frame-level resume for a monolithic MP4 stream.
@@ -357,6 +370,22 @@ broader model/shape, real-media quality, long-run memory and packaged checks rem
 
 ## Delivery gates
 
+21 October production audit: [RELEASE_READINESS.md](RELEASE_READINESS.md) tracks
+the current release requirements. The generated mixed-rate fixture that exposed
+1.333 seconds of interior drift now passes with timestamp-aware CFR resampling;
+maximum measured marker error is 66.7 ms. Missing packet-PTS media and further
+decoder variants remain open; the missing-metadata fallback unit test passes.
+Owned FFmpeg software decoding/preflight has bounded cancellation and cleanup,
+and upload admission runs before multipart parsing with a Starlette 1.8.0
+minimum. A midstream stalled-decoder worker test now closes both owned process
+pipes and completes the next queued job. Full suites passed 613 tests in both
+CPU and GPU-runtime environments; the CPU suite also passed with the Starlette
+1.8.0 overlay. Real sustained media, a full clean CPU install, current-package
+keyboard/native actions, clean-machine setup, physical playback, and release
+operations remain open in the matrix. Packaged build identity, bounded
+job/copy/session admission and early encoder termination on pipeline failure
+also have regression coverage.
+
 Every implementation slice should include a bounded spec, affected files, semantic acceptance criteria, relevant automated checks and a short changelog. Keep benchmark outputs and environment details sufficient to reproduce claims. Run both CPU and GPU environment suites for shared inference/runtime changes and real hardware checks when making GPU claims.
 
 Quality evaluation should combine synthetic geometry tests, matched visual comparisons and motion inspection. Where ground-truth depth is unavailable, do not present an image-similarity score as proof of correct depth. Compare speed at matched settings and report quality changes when settings differ.
@@ -373,9 +402,11 @@ its remaining real-media and reliability acceptance alongside these additions.
    cleanup (3.6), and reusable rendering grids/XREAL packing (1.2). Remaining:
    packaged native-action checks, direct per-job destinations with durable lookup,
    output/model deletion controls, and representative long/neural performance runs.
-2. **Reusable tuning work:** saved projects (4.1) and persistent video-depth caching
-   (4.2), with source identity, storage quotas and cleanup designed together.
-3. **Better decisions and convenience:** named/favorite presets (3.2), selected-range
+2. **Reusable tuning work:** metadata-only saved projects (4.1) and optional
+   persistent video-depth caching (4.2) are implemented. Continue real-media,
+   packaged and storage-cost validation; source retention remains separate.
+3. **Better decisions and convenience:** named/favorite presets (3.2) are implemented;
+   continue selected-range
    exports (3.7), same-frame settings A/B (3.1), complete-export calibration (1.3),
    whole-queue ETA (1.4), and optional model-aware grouping (1.6).
 4. **Larger editing and recovery features:** scene-specific strength/convergence

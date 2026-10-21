@@ -86,7 +86,7 @@ class RoadmapRuntimeTests(unittest.TestCase):
                 gate.release()
 
         states_at_preflight = []
-        def preflight(*_):
+        def preflight(*_, **_kwargs):
             states_at_preflight.append(job.state)
             return {'estimate_is_guarantee': False}
 

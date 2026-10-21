@@ -1,5 +1,6 @@
 import os
 import subprocess
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -47,7 +48,7 @@ class PreflightTests(unittest.TestCase):
         return capture
 
     def video(self, capture, layout='SBS', resolution='source'):
-        with patch('preflight.cv2.VideoCapture', return_value=capture):
+        with patch('preflight.open_preflight_capture', return_value=capture):
             return inspect_media(self.source, 'video', layout, resolution, self.root, str(self.ffmpeg))
 
     def test_image_odd_and_half_layout_dimensions_follow_actual_packing(self):
@@ -118,6 +119,26 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(report['fps'], .5)
         self.assertFalse(report['fps_provisional'])
 
+    def test_video_preflight_uses_owned_capture_with_job_cancellation(self):
+        cancel = threading.Event()
+        capture = self.capture()
+        with patch('preflight.open_preflight_capture', return_value=capture) as owned, \
+                patch('preflight.cv2.VideoCapture') as native:
+            inspect_media(self.source, 'video', 'SBS', 'source', self.root,
+                          str(self.ffmpeg), cancel_event=cancel)
+        owned.assert_called_once_with(self.source, str(self.ffmpeg), cancel)
+        native.assert_not_called()
+        capture.release.assert_called_once()
+
+    def test_video_preflight_cancellation_keeps_its_identity(self):
+        from video_decoder import DecoderCancelled
+        cancel = threading.Event()
+        cancel.set()
+        with patch('preflight.open_preflight_capture', side_effect=DecoderCancelled('cancelled')):
+            with self.assertRaises(DecoderCancelled):
+                inspect_media(self.source, 'video', 'SBS', 'source', self.root,
+                              str(self.ffmpeg), cancel_event=cancel)
+
     def test_minimum_disk_reserve_fails_but_uncertain_estimate_only_warns(self):
         with patch('preflight.shutil.disk_usage', return_value=SimpleNamespace(free=1024)):
             with self.assertRaisesRegex(RuntimeError, 'space|Space'):
@@ -137,7 +158,7 @@ class PreflightTests(unittest.TestCase):
         self.run_mock.return_value = subprocess.CompletedProcess([], 0, ' V....D h264_nvenc hardware encoder\n', '')
         with self.assertRaisesRegex(RuntimeError, 'libx264'):
             self.video(self.capture())
-        with patch('preflight.cv2.VideoCapture', return_value=self.capture()):
+        with patch('preflight.open_preflight_capture', return_value=self.capture()):
             with self.assertRaisesRegex(RuntimeError, 'Install FFmpeg|install FFmpeg'):
                 inspect_media(self.source, 'video', 'SBS', 'source', self.root, None)
 

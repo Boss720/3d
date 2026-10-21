@@ -1,14 +1,21 @@
 """Decoder framing, startup fallback, and owned-process lifecycle checks."""
 import io
+import os
+from pathlib import Path
+import shutil
 import subprocess
 import threading
+import sys
+import time
 import unittest
+import uuid
 from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
 
 import video_decoder as decoder
+from media_process import run_media_command, probe_video
 
 
 ADAPTER = {'id': 2, 'name': 'AMD Radeon', 'vendor_id': 0x1002, 'software': False}
@@ -131,7 +138,7 @@ class DecoderTests(unittest.TestCase):
 
     def test_release_stops_a_process_and_joins_threads_even_with_full_queue(self):
         process = self.process(bytes(range(120)))
-        process.poll.return_value = None
+        process.poll.side_effect = [None, None, 0]
         process.wait.side_effect = [subprocess.TimeoutExpired('ffmpeg', 2), 0]
         capture = self.capture(process)
         capture.release()
@@ -176,7 +183,7 @@ class DecoderTests(unittest.TestCase):
         cancel = threading.Event()
         capture.cancel_event = cancel
         cancel.set()
-        with self.assertRaises(decoder.DecoderCancelled):
+        with self.assertRaises(decoder.DecoderCleanupError):
             capture.read()
         self.assertTrue(all(not thread.is_alive() for thread in capture._threads))
         process.kill.assert_called_once()
@@ -202,7 +209,8 @@ class DecoderTests(unittest.TestCase):
             thread.ident = 1
             thread.is_alive.return_value = True
         capture._threads = readers
-        capture.release()
+        with self.assertRaises(decoder.DecoderCleanupError):
+            capture.release()
         for thread in readers:
             thread.join.assert_called_once_with(timeout=2)
         capture.process.stdout.close.assert_not_called()
@@ -253,6 +261,175 @@ class CancellationRegressionTests(unittest.TestCase):
         self.assertIsNotNone(children[0].poll())
         self.assertTrue(children[0].stdout.closed)
         self.assertTrue(children[0].stderr.closed)
+
+
+class OwnedSoftwareTests(unittest.TestCase):
+    METADATA = {'width': 2, 'height': 1, 'fps': 15., 'fps_ratio': '15',
+                'total_frames': 2, 'video_start_seconds': 2., 'format_start_seconds': 1.}
+
+    def test_default_software_capture_never_constructs_native_opencv(self):
+        # Semantic guard: a native open would enter caller-uninterruptible code.
+        with patch.object(decoder.cv2, 'VideoCapture', side_effect=AssertionError('native open is forbidden')), \
+             patch.object(decoder, 'probe_video', return_value=self.METADATA, create=True), \
+             patch.object(decoder, 'D3D11Capture') as factory:
+            capture = decoder.open_video_capture('source.mp4', 'ffmpeg', prefer_hardware=False)
+        self.assertIs(capture, factory.return_value)
+        self.assertIsNone(factory.call_args.args[3])
+
+    def test_both_commands_normalize_pts_then_sample_average_cfr(self):
+        for adapter in (None, 2):
+            command = decoder.decoder_command('ffmpeg', 'source.mp4', adapter, '30000/1001')
+            filters = command[command.index('-vf') + 1]
+            self.assertIn('setpts=PTS-STARTPTS,fps=fps=30000/1001:round=near', filters)
+            self.assertEqual(command[command.index('-fps_mode') + 1], 'passthrough')
+
+    def capture_child(self, script, *, event=None, timeout=1):
+        children = []
+
+        def spawn(_command, **options):
+            child = subprocess.Popen([sys.executable, '-c', script], **options)
+            children.append(child)
+            return child
+
+        capture = decoder.D3D11Capture('source.mp4', 'ffmpeg', self.METADATA, None,
+                                       event, popen=spawn, read_timeout=timeout)
+        self.addCleanup(capture.release)
+        self.assertEqual(len(children), 1)
+        return capture
+
+    def assert_clean(self, capture):
+        self.assertIsNotNone(capture.process.poll())
+        self.assertTrue(capture.decoder_info['cleanup_complete'])
+        self.assertTrue(all(not thread.is_alive() for thread in capture._threads))
+        self.assertTrue(capture.process.stdout.closed)
+        self.assertTrue(capture.process.stderr.closed)
+
+    def test_real_midstream_stall_has_finite_read_deadline_and_cleans_up(self):
+        capture = self.capture_child("import sys,time;sys.stdout.buffer.write(b'123456');sys.stdout.flush();time.sleep(60)", timeout=.2)
+        self.assertTrue(capture.read()[0])
+        started = time.monotonic()
+        with self.assertRaisesRegex(RuntimeError, 'timed out'):
+            capture.read()
+        self.assertLess(time.monotonic() - started, 5)
+        self.assert_clean(capture)
+
+    def test_real_midstream_stall_cancellation_is_observed_while_polling(self):
+        cancel = threading.Event()
+        capture = self.capture_child("import sys,time;sys.stdout.buffer.write(b'123456');sys.stdout.flush();time.sleep(60)", event=cancel)
+        self.assertTrue(capture.read()[0])
+        timer = threading.Timer(.15, cancel.set)
+        timer.start()
+        try:
+            with self.assertRaises(decoder.DecoderCancelled):
+                capture.read()
+        finally:
+            timer.cancel()
+        self.assert_clean(capture)
+
+    def test_stop_from_control_thread_interrupts_blocked_read_and_release_is_idempotent(self):
+        capture = self.capture_child("import sys,time;sys.stdout.buffer.write(b'123456');sys.stdout.flush();time.sleep(60)")
+        self.assertTrue(capture.read()[0])
+        result = []
+        reader = threading.Thread(target=lambda: result.append(capture.read()))
+        reader.start()
+        capture.stop()
+        reader.join(timeout=3)
+        capture.release()
+        capture.release()
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(result, [(False, None)])
+        self.assert_clean(capture)
+
+    def test_hardware_cleanup_failure_does_not_spawn_software_fallback(self):
+        with patch.object(decoder, 'probe_video', return_value=self.METADATA), \
+             patch.object(decoder, 'probe_hardware', return_value={'adapters': [ADAPTER]}), \
+             patch.object(decoder, 'D3D11Capture', side_effect=decoder.DecoderCleanupError('child survived')) as factory:
+            with self.assertRaisesRegex(decoder.DecoderCleanupError, 'child survived'):
+                decoder.open_video_capture('source.mp4', 'ffmpeg')
+        factory.assert_called_once()
+
+    def test_rotated_video_truthfully_uses_software_without_hardware_start(self):
+        with patch.object(decoder, 'probe_video', return_value=dict(self.METADATA, rotation_degrees=90)), \
+             patch.object(decoder, 'probe_hardware', return_value={'adapters': [ADAPTER]}), \
+             patch.object(decoder, 'D3D11Capture') as factory:
+            factory.return_value.decoder_info = {}
+            capture = decoder.open_video_capture('source.mp4', 'ffmpeg')
+        self.assertIsNone(factory.call_args.args[3])
+        self.assertIn('orientation', capture.decoder_info['fallback_reason'])
+
+
+class GeneratedMediaTests(unittest.TestCase):
+    """Optional actual FFmpeg regressions; generated evidence is retained."""
+    def setUp(self):
+        self.ffmpeg = os.environ.get('VIDEO3D_FFMPEG') or shutil.which('ffmpeg')
+        if not self.ffmpeg:
+            self.skipTest('Set VIDEO3D_FFMPEG to run generated-media decoder regressions.')
+        if not Path(self.ffmpeg).with_name('ffprobe.exe' if os.name == 'nt' else 'ffprobe').is_file():
+            self.skipTest('Generated-media regressions require FFprobe beside FFmpeg.')
+        self.root = Path(__file__).resolve().parents[1] / '.runtime' / 'owned-decoder' / ('generated-' + uuid.uuid4().hex)
+        self.root.mkdir(parents=True)
+
+    def command(self, args):
+        result = run_media_command([self.ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', *args])
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+
+    def frames(self, source):
+        capture = decoder.open_video_capture(source, self.ffmpeg, prefer_hardware=False)
+        frames = []
+        try:
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                frames.append(frame)
+        finally:
+            capture.release()
+        self.assertTrue(capture.decoder_info['cleanup_complete'])
+        self.assertFalse(any(thread.is_alive() for thread in capture._threads))
+        return frames, capture
+
+    def test_vfr_markers_reach_known_four_second_transition_after_cfr_resampling(self):
+        raw = self.root / 'markers.bgr24'
+        with raw.open('wb') as output:
+            for ordinal in range(120):
+                frame = np.zeros((32, 128, 3), dtype=np.uint8)
+                for bit in range(7):
+                    frame[:, bit * 16:(bit + 1) * 16] = 255 if ordinal & (1 << bit) else 0
+                output.write(frame.tobytes())
+        source = self.root / 'vfr-start-two.mp4'
+        self.command(['-f', 'rawvideo', '-pixel_format', 'bgr24', '-video_size', '128x32',
+            '-framerate', '20', '-i', str(raw), '-vf',
+            r'setpts=if(lt(N\,40)\,N/(10*TB)\,4/TB+(N-40)/(20*TB))+2/TB',
+            '-fps_mode:v', 'vfr', '-frames:v', '120', '-c:v', 'libx264', '-preset', 'ultrafast',
+            '-crf', '0', '-pix_fmt', 'yuv420p', '-avoid_negative_ts', 'disabled', str(source)])
+        frames, capture = self.frames(source)
+        ordinals = [sum(1 << bit for bit in range(7)
+                        if np.median(frame[4:12, bit * 16 + 4:bit * 16 + 12]) > 127)
+                    for frame in frames]
+        self.assertEqual(len(frames), 120)
+        self.assertEqual(capture.fps, 15)
+        self.assertEqual(capture.probe['video_start_seconds'], 2)
+        transition = next(index for index, ordinal in enumerate(ordinals) if ordinal >= 40)
+        self.assertAlmostEqual(transition / capture.fps, 4., delta=.12)
+        expected = [ordinal / 10 if ordinal < 40 else 4 + (ordinal - 40) / 20 for ordinal in ordinals]
+        self.assertLessEqual(max(abs(index / capture.fps - source_time)
+                                 for index, source_time in enumerate(expected)), .12)
+        self.assertEqual(ordinals, sorted(ordinals))
+        self.assertLess(len(set(ordinals)), len(ordinals))  # Real duplication occurred.
+
+    def test_cfr_count_and_rotated_display_dimensions_match_actual_frames(self):
+        source, rotated = self.root / 'cfr.mp4', self.root / 'rotated.mp4'
+        self.command(['-f', 'lavfi', '-i', 'testsrc2=size=64x32:rate=10:duration=0.5',
+                      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', str(source)])
+        frames, capture = self.frames(source)
+        self.assertEqual(len(frames), 5)
+        self.assertEqual(capture.probe['total_frames'], 5)
+        self.command(['-i', str(source), '-c', 'copy', '-metadata:s:v:0', 'rotate=90', str(rotated)])
+        metadata = probe_video(rotated, self.ffmpeg)
+        rotated_frames, capture = self.frames(rotated)
+        self.assertEqual((metadata['width'], metadata['height']), (32, 64))
+        self.assertEqual(len(rotated_frames), 5)
+        self.assertTrue(all(frame.shape == (64, 32, 3) for frame in rotated_frames))
 
 
 if __name__ == '__main__':

@@ -26,3 +26,6 @@ main>.queue-panel{margin-top:12px;padding:12px}.queue-panel>.panel-header{margin
 @media(max-width:640px){.preview-footer{padding:4px 9px 6px}.frame-strip{margin-top:8px}.settings-column .inspector-output .format-tiles{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .inspector-model #generatePreview{display:block;width:100%;min-height:28px;padding:4px 8px;margin:7px 0;font-size:10px;color:#e2cbff;background:#2c203e;border-color:#67458f}.inspector-model #generatePreview:disabled{display:none}.inspector-output:has(#convertButton:not(:disabled)) #convertHint{display:none}.inspector-output .primary-button{margin-top:8px}.inspector-model .studio-disclosure{margin-top:4px}.studio-utilities .preview-footer{padding:8px 0}.studio-utilities .preview-footer #sourceName{display:block}.frame-strip{margin-top:10px}
 .inspector-model{position:relative}.inspector-model #generatePreview{position:absolute;right:12px;top:9px;width:auto;min-height:26px;margin:0;padding:4px 8px}.inspector-model:has(#generatePreview:not(:disabled)) .field-title>a{visibility:hidden}
+
+.inspector-model .preview-status{margin:2px 0 8px;overflow-wrap:anywhere}
+.inspector-model #generatePreview:disabled[data-preview-busy="true"]{display:block;opacity:.6;cursor:progress}

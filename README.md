@@ -35,6 +35,11 @@ app detects FFmpeg on `PATH`, `VIDEO3D_FFMPEG`, or an already installed local he
 The frozen app stores uploads and outputs under the same StereoLab local-data folder.
 One-file extraction can make the first launch slower, and Windows may show a warning
 for an unsigned PyInstaller executable.
+The `setup-gpu.ps1` and `build-exe.ps1` commands above are for developers building
+from source; packaged users do not run them. First neural-model installation needs
+internet access and an explicit Install action. A model becomes ready after
+its pinned size/SHA-256 and inference checks pass. Clean-Windows first-run behavior
+is still under release review; see `RELEASE_READINESS.md`.
 
 Prebuilt Windows beta downloads are published on the [GitHub Releases page](https://github.com/Boss720/3d/releases).
 
@@ -141,6 +146,10 @@ processing and other GPU applications can change timing and memory use.
 4. Use **Generate preview** to process the current photo/video frame. Inspect Stereo or Depth map. Strength, convergence, layout, inversion and refinement edits reuse valid inferred depth; changing the frame, engine, input detail or execution settings invalidates it. Temporal smoothing only applies during video export.
 5. Convert the queue and download the results. Completed files remain in `outputs/`.
 
+Paths such as `outputs/`, `.runtime/models/`, quarantine folders and calibration
+reports are relative to the repository root for source runs. In the packaged app,
+they are relative to `%LOCALAPPDATA%\StereoLab`.
+
 Media stays on the local server. Only model installation contacts Hugging Face. Model weights are stored in `.runtime/models/`. Uploaded conversion sources are removed when processing finishes. If Windows locks a temporary file or prevents its removal, the queue shows a cleanup warning and preserves the file; other jobs continue. Close apps using that file and check local data-folder permissions. The queue survives browser refresh while the server is running; source files must be added again for previews after refresh. Temporary queue-loading failures retry automatically with a delay capped at 30 seconds; **Refresh status** also refreshes the queue immediately. Queue state is not retained across server restarts; completed files remain on disk. Clearing the browser's finished list does not delete exports.
 
 ## Depth engines
@@ -151,7 +160,7 @@ Media stays on the local server. Only model installation contacts Hugging Face. 
 | Depth Anything V2 Small FP16 | 49.6 MB | Apache-2.0 | Optional reduced-precision weights; slower than optimized FP32 in the local GTX test |
 | Depth Anything V2 Base | 389 MB | CC-BY-NC-4.0 | CPU/DirectML GPU; non-commercial weights |
 | Depth Anything V2 Large | 1.34 GB | CC-BY-NC-4.0 | DirectML attempted at 4 GB with 518 px cap; Auto can fall back to CPU |
-| DPT Hybrid / MiDaS | 533 MB | Apache-2.0, Intel upstream | CPU/DirectML GPU; 384 px inference |
+| DPT Hybrid / MiDaS | 533 MB | Apache-2.0 (Intel upstream; conversion terms need review) | CPU/DirectML GPU; 384 px inference |
 | Custom ONNX | Your file | Your model's license | OpenCV DNN CPU |
 | Visual approximation | None | App code | Image cues; **not neural AI depth** |
 
@@ -159,11 +168,11 @@ Downloads honor configured HTTPS proxies. If a loopback proxy refuses the connec
 
 Named models use their own preprocessing. Depth Anything uses RGB/ImageNet normalization with aspect-preserving, multiple-of-14 sizing (nominal 518); MiDaS uses its 384 px/0.5 normalization. Both produce relative inverse depth: brighter means nearer. Custom models must accept a float32 RGB NCHW batch with square 256/384/518 input, ImageNet normalization, and return one depth map; not every ONNX graph matches this convention.
 
-Model provenance: [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2), [Small ONNX export](https://huggingface.co/onnx-community/depth-anything-v2-small), [MiDaS ONNX export](https://huggingface.co/Xenova/dpt-hybrid-midas), [MiDaS upstream](https://huggingface.co/Intel/dpt-hybrid-midas). The ONNX conversions are published by ONNX Community/Xenova, rather than the original model authors.
+Model provenance: [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2), [Small ONNX export](https://huggingface.co/onnx-community/depth-anything-v2-small), [MiDaS ONNX export](https://huggingface.co/Xenova/dpt-hybrid-midas), [MiDaS upstream](https://huggingface.co/Intel/dpt-hybrid-midas). The ONNX conversions are published by ONNX Community/Xenova, rather than the original model authors. The Intel model card states Apache 2.0, but the Xenova conversion page does not visibly state a separate license; see `RELEASE_DEPENDENCIES.md` for the pinned source revisions and review status.
 
 ## Formats and controls
 
-Full/half SBS, full/half top-bottom, cross-eye, red/cyan anaglyph, depth-only, and color-plus-depth side-by-side are available. Videos export H.264/AAC MP4; photos export PNG. Depth exports are normalized 8-bit grayscale, not metric depth or a lossless depth archive. Resolution limits apply per eye; full SBS doubles the encoded width. Video exports preserve decoded frame count and nominal frame rate, and include original audio where available. Variable-frame-rate timing is converted to a constant rate; HDR, subtitle tracks and spatial metadata are not preserved.
+Full/half SBS, full/half top-bottom, cross-eye, red/cyan anaglyph, depth-only, and color-plus-depth side-by-side are available. The `XREAL_SBS` profile writes full side-by-side at 3840x1080 (1920x1080 per eye), matching [XREAL's One Series Full SBS frame size](https://tutorials.xreal.com/docs/glasses/one-series/osd/3d-mode/). Videos export H.264/AAC MP4; photos export PNG. Depth exports are normalized 8-bit grayscale, not metric depth or a lossless depth archive. Resolution limits apply per eye; full SBS doubles the encoded width. Video exports preserve decoded frame count and nominal frame rate, and include original audio where available. Variable-frame-rate timing is converted to a constant rate; HDR, subtitle tracks and spatial metadata are not preserved. Physical playback on XREAL 1S glasses has not yet been verified.
 
 Fine tuning offers inversion, luminance-guided edge refinement, and motion-gated temporal smoothing with scene-cut resets. These are practical filters, not a learned video-depth model. Inverse warping can stretch occlusion edges; it cannot reconstruct hidden surfaces. Similar-color motion can leave smoothing lag. Default browser previews use a 960x540 JPEG proxy. Full-detail stills preserve the decoded source within the limits below; neural input remains independently capped. Containers/codecs unsupported by the browser can still be decoded for export by FFmpeg.
 
@@ -225,7 +234,7 @@ Lower detail can lose fine edges. This does not calibrate models, encoders or wh
 exports, and MiDaS has fixed input dimensions. Up to 16 reports are saved atomically
 in `.runtime/calibrations.json`; no old measurement is applied automatically.
 
-Preview zoom/pan is shared across views (1Ã—â€“4Ã—). Focus the preview and use +/âˆ’,
+Preview zoom/pan is shared across views (1x-4x). Focus the preview and use +/-,
 arrow keys and 0 to reset, or drag a zoomed view. **Source / Depth** reveals two
 images from the exact processing frame sent to inference and labels its dimensions.
 It never compares a processed result against a newly sought live video frame.
@@ -346,14 +355,21 @@ Failed history writes show a warning; new admissions and settings/name edits are
 blocked while already-admitted work and cancellation remain available. Account
 for current outputs before repairing storage and restarting. History is local,
 single-process metadata storage; reload/multi-worker and network filesystems are
-unsupported. Source and frozen EXE data roots have separate history. The existing
-EXE has not been rebuilt with this source change. See `plans/job-history.md` for
-the failure and ownership contract; source retention and frame resume remain
-unavailable.
+unsupported. Source and frozen EXE data roots have separate history. The public
+prebuilt beta EXE has not been rebuilt with these source changes. A private
+isolated candidate includes the latest frontend edits and passed same-machine
+package acceptance, focused Chromium keyboard/focus/status checks, and packaged
+save-copy byte-integrity/overwrite checks. Open output folder and Reveal file
+opened the isolated output directory and displayed the generated output; the
+Reveal selection highlight remains unconfirmed. Same-host fresh-profile model
+installation and generated neural output also passed. Screen-reader behavior
+and clean-account/machine installation remain open. See
+`RELEASE_READINESS.md` and `plans/job-history.md`; source retention and frame
+resume remain unavailable.
 
 DEPTH/RGB-D no longer synthesize unused stereo eyes. An alternating four-sample
-1080p approximation-to-PNG benchmark measured DEPTH medians 0.321 â†’ 0.277 seconds
-and RGB-D 0.335 â†’ 0.313 seconds, with identical PNG bytes. This measures the image
+1080p approximation-to-PNG benchmark measured DEPTH medians 0.321 to 0.277 seconds
+and RGB-D 0.335 to 0.313 seconds, with identical PNG bytes. This measures the image
 processing path, excluding upload, queue, preflight and download; it is not a
 universal speedup. Reproduce with `scripts/benchmark_render_outputs.py`.
 
@@ -391,8 +407,22 @@ not establish OS encoder-process cleanup.
 
 ## Verification
 
+Production release status and the remaining correctness checks are tracked in
+[RELEASE_READINESS.md](RELEASE_READINESS.md). Timestamp-aware VFR conversion now
+passes generated mixed-rate and missing-PTS checks; real-footage audio sync and
+wider codec/driver coverage remain open.
+
+The local server accepts `--port` (1–65535), for example
+`.\dist\StereoLab.exe --port 8770`; it always binds to `127.0.0.1`.
+The queue accepts at most 32 pending jobs, four simultaneous application upload
+copies, and 512 session records. A full session requires finishing active work
+and restarting; saved outputs remain on disk. Multipart receiving has a separate
+four-request admission cap before parser body reads; excess recognized requests
+are rejected before parsing. This is separate from the application upload-copy
+limit.
+
 ```powershell
-.\.venv\Scripts\python.exe -m pip install httpx
+.\.venv\Scripts\python.exe -m pip install -r requirements-test.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 node --check static/app.js
 ```
@@ -428,6 +458,49 @@ managed paths. To save elsewhere, enter an existing writable folder under Local
 storage, then use **Save copy** on a completed job. Copies never overwrite an existing
 file; the managed original stays available for history/downloads, so copies consume
 additional storage. Direct conversion to a custom destination remains planned.
+
+### Optional video depth reuse
+
+Enable **Advanced settings & tools → Fine tuning → Reuse video depth maps** before
+exporting a video with a named neural model. The setting is off by default and is
+saved with queue settings, presets and projects. A completed export can retain its
+native depth maps; exporting the identical source again can then skip inference
+while changing strength, convergence, refinement, encoding or a layout that keeps
+the same working frame dimensions. Source relinking/upload is still required.
+Images, custom ONNX and processed preview clips do not populate this cache.
+
+Changing the source bytes, model bytes, depth detail, inversion, smoothing, cadence,
+working dimensions, execution mode, decoder or relevant runtime/code version causes
+a miss. Each decoded frame is checked against its saved identity. If a saved
+sequence does not match, the full export restarts once with fresh depth. The queue
+labels a hit **Cached depth · CPU rendering**, with the original inference details
+retained separately; a hit makes no new GPU inference claim.
+
+Maps retain exact float32 values after native temporal filtering, before upscale,
+edge refinement and stereo rendering. Storage is uncompressed and bounded by a
+**2 GiB quota**, including partial writes; entries are never automatically evicted.
+For the generated 24-frame Small-model check, maps occupied about **3.24 MiB** on
+disk. At the same native shape, 30 FPS would require roughly **243 MiB per minute**
+before manifest overhead; dimensions and detail can change this substantially.
+Quota exhaustion, a locked cache or disk failure warns and continues conversion.
+After the first map, the queue shows an estimated total when the frame count is
+known; a projection larger than the quota skips caching immediately.
+Failed, canceled and temporary CPU-fallback attempts do not publish a new entry.
+An unavailable cache directory does not prevent application startup.
+
+Use **Local storage → Refresh cache** to review exact disk usage, quota, active
+entries and incomplete-file warnings, then select entries to remove. Inactive
+partials are selectable; active reads/writes are protected, including from another
+StereoLab process sharing the folder. Cleanup failures remain visible and retryable.
+Cache data lives in `.runtime/depth-cache` under the app data directory.
+
+Reproduce the bounded real-model check without downloading weights or starting a
+server: `.\.venv-gpu\Scripts\python.exe scripts/verify_depth_cache.py --execution-mode gpu`.
+It generates a short video with audio, counts real inference calls and fully
+decodes exports. Two local GTX repeats each used 24 inferences to populate and
+zero for each hit; the same-settings hit matched encoded video, decoded pixels and
+audio exactly. This verifies reuse on generated media; long films, variable frame
+rate and packaged neural-cache behavior need further validation.
 
 Video exports now reuse job-owned stereo-warp scratch buffers and pack XREAL output
 into one combined canvas. Matched outputs are unchanged. Three short CPU-only

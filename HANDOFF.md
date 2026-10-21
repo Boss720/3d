@@ -1,320 +1,152 @@
-# StereoLab roadmap handoff — 20 October 2026
+# StereoLab handoff — 21 October 2026
 
-## Current checkpoint — committed instrumentation; live GPU observation gate passed
+**Release is not ready.** This checkpoint preserves the current source and
+private-candidate evidence. The owner has authorized committing and pushing the
+source to GitHub. A source push does not select a project license or approve
+publication of a new executable, version, or release.
 
-Committed the scoped process-observation work as `d78b70c` on `master`, then
-completed the generated all-model live gate on a new private GPU API
-(PID972/port52711). This owned instance was gracefully stopped with exit0 after
-archiving eight terminal jobs: four completed exports and four cancellations.
-Fresh final process inventory finds the API and all five observed FFmpeg
-identities absent. GPU returned to 0 MiB/0%; no historical service was restarted.
+## Source checkpoint and scope
 
-Each export decoded independently to 360 frames at 640x180/12fps with audio and
-30-second duration. DirectML execution matched archived public job records with
-successful inference and no fallback. Each completed export had verified FFmpeg
-identity observations, zero sampling errors, and absence at the first terminal
-sample (rounded 0.000–0.016s after terminal receipt). This establishes sampled
-absence, not exact process exit times. Cancellation triggers were conversion
-frames 7/5/7/5 of360; all four ended canceled with HTTP404 download checks.
-Canceled-job process cleanup was not separately instrumented and remains open.
+- Repository: `D:\Users\Hp\Documents\ChatGPT\3d`; `master`; remote: `https://github.com/Boss720/3d.git`.
+- Source checkpoint: the commit containing this handoff; use `git log -1` and
+  `git log -1 -- HANDOFF.md`. Remote integration base is `origin/master`
+  `3c1f09e1dd51646ed4db2b22cc7bdd7ea0302024`, preserving its README support link.
+  Push verification compares local HEAD with `git ls-remote --heads origin master`;
+  the final verified hash is recorded in chat and local `PROGRESS.md`.
+- The coordinator is preserving the existing feature code and committing the
+  scoped application, tests, verifier/build files, and root release documents.
+  `PROGRESS.md`, `.runtime/`, review ZIPs, and other `output/` artifacts stay local.
+  Paths below therefore do not imply that their payloads are available on GitHub.
+- Current source adds bounded admission, owned decoder/encoder cancellation and
+  cleanup, media-timing fixes, opt-in persistent neural depth reuse, frozen build
+  identity, source relinking, and preview/queue accessibility improvements.
+- Owner scope is generated media only, targeting XREAL 1S. The owner currently
+  has no access to the glasses. No project source license has been chosen.
 
-Evidence: `.runtime/stress-verification/20261020T121020Z-3509b490/report.json`;
-`.runtime/commit-resume/live-20261020/run.json` and `jobs-final.json`;
-`.runtime/commit-resume/independent-audit/audit-result.json`.
-Before/after full model SHA256 inventories matched; an independent disk rehash
-also passed. Live WDDM process memory still reported `[N/A]`.
+Start with `RELEASE_READINESS.md` for acceptance, `RELEASE_DEPENDENCIES.md` for
+candidate-specific dependency review, and `README.md` for use. `ROADMAP.md` is
+an ongoing backlog; its older open items can be superseded by dated release
+results. The former long handoff is retained locally at
+`.runtime/final-push-checkpoint-20261021/HANDOFF-before-wrapup.md`.
 
-The first independent audit had an output-variable collision that overwrote
-only the downloaded Large verification copy with its JSON result. Preserved that
-JSON, restored the copy from the untouched API output after SHA256/size checks,
-fixed/confined the audit output path, and reran successfully. Root rehashed all
-four verification copies after the corrected audit; all matched original export
-metadata. Recovery and corrected raw logs remain beside the audit result.
+## Selected private candidate: Python 3.12
 
-The live gate's evidence updates are recorded in this handoff, ROADMAP and
-PROGRESS. The four unrelated UI mockups remain outside the commit.
-Next bounded gate: canceled-job FFmpeg observations using the same identity and
-terminal-window contract. Representative footage, multi-hour reliability, exact
-process VRAM, intermittent GPU variance and physical-display review remain open.
-
-## Previous checkpoint — commit and resume authorized
-
-The user requested committing the process-observation slice, then resuming with
-army. Three independent lanes reviewed process identity, stress semantics, and
-the private launch procedure. Review found and fixed a Toolhelp/PID-reuse race,
-a post-terminal observation window delayed until after download/inspection, and
-a stale cancellation status comparison. Semantic regression evidence is retained
-under `.runtime/commit-resume/{process-review,stress-review}/`.
-
-Independent final CPU and GPU-environment suites each passed 406 tests, with one
-existing real-Windows-symlink privilege skip (16.150s and 16.307s). Python
-compilation, Node syntax and whitespace checks passed. These suites precede the
-new live GPU gate; no live result is claimed at this checkpoint.
-
-Fresh NVIDIA inventory reports 0 MiB used, 0% utilization and no compute
-processes; documented historical service ports are no longer listening. A
-run-specific wrapper under `.runtime/commit-resume/private_gpu_gate.py` isolates
-writable app directories and disables history before startup. It retains the
-accepted model cache and runs unchanged production execution methods. Next:
-after the scoped commit, recheck idle state and run the generated all-model GPU
-process-observation gate on this newly owned private API, then archive jobs and
-stop it gracefully. Representative footage and multi-hour acceptance stay open.
-
-## Previous checkpoint — Phase 0.1 process observation instrumented (19 October)
-
-Repository `D:\Users\Hp\Documents\ChatGPT\3d`, branch `master`, HEAD
-`2bc6361`. The current process-cleanup instrumentation changes are uncommitted.
-The four requested dark UI mockups under `output/` were already untracked and
-remain untouched; no other output artifacts were staged or removed. No commit,
-push, or executable build was requested.
-
-The stress runner now requires an explicit loopback URL and expected server PID,
-then matches `/api/diagnostics/resources` and the read-only Windows process
-snapshot before it can submit jobs. It records verified FFmpeg PID/creation-time
-identities on job polls, checks those identities globally after terminal status
-to handle reparenting, and distinguishes first-sample absence, visibility then
-absence, persistence, PID reuse, and unavailable observations. A timeout or
-missing terminal snapshot is unverified and does not start a post-terminal
-window. Snapshot-time visibility does not establish exact exit timing.
-Cancellation now requires a processing/conversion job with at least five but
-fewer than all frames completed, and records phase and frame counts.
-
-Coordinator verification passed **399 tests** in each of `.venv` and `.venv-gpu`,
-with the same existing Windows real-symlink privilege skip. Python compilation
-passed. The helper lane also passed its 10 focused tests, including an owned
-Windows child/nested-child lifecycle. No stress API job or new GPU workload was
-run; current services remain untouched and per-process WDDM memory is still
-reported as `[N/A]`.
-
-Next gate: use an authorized representative clip and a genuinely idle window to
-run a newly owned private GPU API with explicit PID matching, then collect live
-process observations. Multi-hour reliability and exact process VRAM need their
-own evidence; this instrumentation alone does not close Phase 0.1.
-
-## Previous checkpoint — history integrated; fresh GPU clip gate passed (18 October)
-
-## Prior checkpoint details — history integration and GPU clip gate
-
-Repository D:\Users\Hp\Documents\ChatGPT\3d, branch master, HEAD `20709ff`
-(dark UI polish). The Phase 4.1 application integration is implemented and
-verified in the working tree, uncommitted. GPU consistency diagnostics and the
-strict clip verifier have also been improved and verified. Earlier documentation changes and
-output/ mockups were preserved. No push or EXE rebuild was requested.
-
-Opt-in `STEREOLAB_HISTORY_INSTANCE` is now active at ASGI startup. The app owns
-the worker lifetime and holds SQLite/lease ownership until cancellation and
-worker join finish. Ordinary exports have streamed source hashes, capacity
-checks and durable admission/settings/naming/lifecycle boundaries. Status and
-read-only prior-launch history/download APIs feed the new history UI. Sources,
-queue order and processing state are not restored or automatically requeued.
-
-Latest independent suites: CPU 380 tests in 11.991s and GPU environment 380 in
-11.624s, both OK with one existing Windows real-symlink privilege skip. Logs:
-.runtime/gpu-consistency-followup/full-cpu.log and full-gpu.log. Node syntax,
-Python compilation and whitespace checks passed. The earlier history-only
-364-test suites remain in .runtime/history-coordinator-*-final.log.
-The initial full-suite fixture failure is retained separately in
-.runtime/history-coordinator-cpu-tests.log; its mock now produces an owned output.
-
-Isolated CPU acceptance completed a generated still, canceled a controlled active
-image, left a pending record, then gracefully restarted: prior success downloaded
-with identical bytes, pending became interrupted, source SHA256/size matched,
-current JOBS stayed empty and a concurrent second owner was rejected. Evidence:
-.runtime/history-restart-verification/25c0413df33040f08bfa829e36d733e8/report.json.
-The controlled image waited for production cancellation; this is not long-video
-or GPU execution proof. Browser settings reuse left source empty/convert disabled,
-history refresh worked, no console warnings/errors, and 320/391px layouts had no
-document overflow. Screenshot history-browser.png is beside the report.
-
-History QA did not contact existing services. GPU follow-up used read-only
-status/job guards; none were restarted or stopped. The isolated browser server
-was stopped after QA; its evidence persists and its temporary tab is closed.
-Older live backends and the existing EXE do not gain the new Python behavior
-without a separately accounted-for launch. Historical service inventories below
-must be refreshed before any future service action.
-
-GPU consistency follow-up: exact preprocessed tensors matched across all repeat
-pairs; CPU stages were exact, while both fresh cold and one-frame-warmed GPU
-processes showed small raw-output variation. One warmup is not a proven fix.
-Per-repeat encoding showed libx264 amplification up to decoded max19/mean.005891;
-the tested NVENC pairs decoded identically. Original failed NVENC max29 was not
-reproduced or explained by these diagnostics. Independent output hashes/decodes:
-.runtime/gpu-consistency-followup/independent-audit.json.
-
-Verifier fixes require clip-to-both-export comparisons (tolerances are not
-transitive) and reject missing public execution evidence. Unchanged GPU bounds
-are max1/mean.001. On a NEW private GPU API, full generated source, processed clip,
-two matched exports and cancellation completed: all three 36-frame decoded pairs
-were exactly equal. Report:
-.runtime/clip-verification/consistency-followup/20261018T222230Z-0e510fba/report.json.
-Independent decode: .runtime/gpu-consistency-followup/api-independent.json.
-Five terminal jobs (four complete, one canceled) were saved before stopping owned
-PID34376/port56485. Existing APIs were guarded read-only and job counts unchanged.
-The preserved earlier failed report remains historical counterevidence; this
-fresh passing synthetic run does not establish universal determinism or real-media
-quality. Proxy correspondence was checked by metadata, not exact source pixels.
-
-Next: investigate intermittent raw/codec variance and continue real-media/reliability
-validation. Phase 4.1 project/source-retention work, reusable depth (4.2),
-checkpoints/resume (4.3), broader customization and clean-machine delivery remain
-separate bounded slices. Do not promote either quality prototype without evidence.
-
-The sections below preserve earlier evidence; current integration supersedes the
-old standalone-foundation status and earlier next-step instructions.
-
-## Historical running services — preserve existing download URLs
-
-| Port | Ownership and last check |
+| Identity | Value |
 | --- | --- |
-| 8774 | Latest GPU app, PID13868, exec session7200, browser tab5 retained. One completed coordinator export, no active jobs. |
-| 8772 | Earlier GPU app, PID14348/session36321. Three terminal records, including two user exports. Do not restart it to load new code. |
-| 8770 | Earlier GPU baseline, PID12464. Sixteen terminal records. Left untouched. |
-| 8768 | User's earlier service. Thirty-nine terminal records, no build fingerprint. Left untouched. |
+| EXE | `.runtime/vfr-wave/frontend-a11y-final-20261021/dist/StereoLab.exe` |
+| Size | 98,573,106 bytes |
+| SHA-256 | `4635b66f6c1a377bb08b93c65e7e8700af64bca8039ac0215a8a45b28e30ac4c` |
+| Embedded source fingerprint | `8e56afce8aa2240e94a07f27bc093186939dd3ed0302c72976a51baa76d9e2fe` |
 
-Latest8774 backend fingerprint:
-65bcb937dc4ccb86c2196d44f3ccd676a7e32a8caff1d06e8c392e70eaac3ae1.
-Coordinator independently matched it to current backend source. Static files are
-served from the working tree and are not included in that backend fingerprint.
-Final safe server summary: .runtime/continuation-verification/final-servers.json.
-Recheck active work and record counts before stopping any service.
+The runtime fingerprint covers the 26 Python files declared in
+`build_identity.py`. All nine packaged static assets separately matched source.
+`gpu_hardware.py` is preserved in the source snapshot and its compiled code was
+separately compared with the candidate after normalizing build-path filenames;
+this supplement does not extend the runtime fingerprint.
 
-Own CPU8773/PID25384/session70442 was stopped only after all four terminal records
-were saved in .runtime/continuation-verification/cpu-final-jobs.json. Its files
-remain, but those temporary in-memory download URLs no longer work. Earlier own
-CPU8771 was similarly accounted for in the preceding handoff. No user service,
-source/output directory or model cache was cleaned. WMI process details remain
-unavailable; PID evidence came from owned launch sessions and HTTP diagnostics.
+The Windows x64 console EXE serves a loopback UI. Weights download on demand.
+Video needs external FFmpeg with libx264. DirectML availability and NVENC encoding
+alone do not prove GPU depth inference: inspect the named model's actual
+provider, device, `inference_succeeded`, and `gpu_verified` results.
 
-## Shipped in source during this continuation
+## Evidence retained for this candidate
 
-Output naming: output_naming.py, main.py and frontend implement the frozen
-plans/output-naming.md contract. Ordinary exports accept output_name_template,
-default {name}_{layout}; supported fields are name/layout/model/date. Date uses
-job creation UTC, not execution time. The limit is120 Unicode codepoints on both
-sides; Cc/Cf/Cs controls, paths and formatting expressions are rejected. Final
-ASCII stems are bounded to100 characters, with full UUIDhex and automatic PNG/MP4
-extension. Windows device names before dots are protected. Exclusive reservation
-and owned-output cleanup are retained. Clips keep their own internal names.
+These are same-host generated-media checks. Paths beginning `acceptance` are
+under `.runtime/vfr-wave/frontend-a11y-final-20261021/`.
 
-Naming capability/schema1 is separate from the exact11 performance settings.
-Pending-only POST/api/jobs/{id}/naming is atomic and returns400/404/409 as appropriate.
-Ready-file and batch freezes include names. Retry preserves the original template;
-duplicate uses the current template. Both prepare a new ready item only when the
-browser still holds the original File. Sources are not retained for retry.
-Queue readiness now checks each file's frozen/current settings independently.
-Older backends hide naming controls and omit the unsupported form field.
+| Evidence | Result and retained report |
+| --- | --- |
+| Packaged pipeline/cache/restart | Named Small DirectML inference, cached CPU provenance, encoded/decoded/audio parity, source reupload, history/output identity, cache reuse and selected cleanup: `acceptance/report.json`. |
+| Generated XREAL file | 3840x1080 SBS, eight decoded frames and audio: `acceptance-xreal/report.json`; sample: `acceptance-xreal/first-output.mp4`. No physical playback observed. |
+| Two-hour generated neural export | 7,200/7,200 strict Small DirectML frames; complete video/audio decode with aligned starts; 349.5 seconds wall time, 23 clean resource samples: `acceptance-synthetic-soak-normal/report.json`. |
+| Two-hour same-process uptime | 7,200.047 seconds, 24/24 verified Small DirectML jobs and 478 clean health/resource samples: `.runtime/wallclock-soak-normal-2h-retry-20261021/report.json`. This run used forced owned-process teardown. |
+| Accessibility and output actions | Chromium keyboard Browse, status/busy regions, About naming/focus return and responsive widths: `acceptance-accessibility/report.json`. Copy equality and overwrite refusal: `acceptance-copy/report.json`. Explorer opened and showed the file: `.runtime/release-explorer-ui-20261021-normal2/report.json`; Reveal selection highlighting was not confirmed. |
+| Model failure recovery | A preceding fingerprint-matched private build failed a custom-model inference job, then completed a queued named Small CPU job: `.runtime/vfr-wave/neural-failure-recovery-20261021-retry4/report.json`. |
+| Idle graceful shutdown | Real Ctrl+C, exit 0, closed listener and removed extraction directory, without forced cleanup: `.runtime/graceful-ctrlc-20261021T165240Z-de8c94a9/report.json`. |
+| First actual model download | Empty private profile downloaded Small, then completed generated CPU neural inference: `.runtime/first-run-model-download-20261021-a1/probe/report.json`. |
 
-Completion notifications are off at every page launch. Explicit tab-only opt-in
-requests browser permission only on click. Bounded512-ID tracking ignores clips
-and terminal jobs first discovered during refresh; notices are batched per poll.
-Alt+P generates a still preview and Alt+Enter submits the ready queue through the
-existing enabled buttons. Editable fields, repeats, IME, other modifiers and open
-dialogs suppress shortcuts. Both buttons expose aria-keyshortcuts.
+The first-run download was 99,060,839 bytes in 24.046 seconds. Independent hash
+and pinned-revision receipt checks passed; model SHA-256:
+`afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c`.
+Its CPU output decoded as a 192x64 SBS PNG. Cleanup left no candidate process or
+listener and empty extraction temp. Ctrl+Break returned code 3, so this probe
+does not establish clean application exit. The separate idle Ctrl+C result does.
+This is same-host fresh-profile evidence; clean-account/machine acceptance stays open.
 
-Independent live checks used generated media: frozen engine/name submission worked
-with an invalid visible template and unloaded visible custom model; queued renaming
-worked, invalid edits returned400 and completed edits409. Downloaded PNG640x180
-had the expected date/fullUUID name. Browser keyboard preview/submit, editable
-suppression, tab arrows/End and panel labels passed. Real browser notification
-permission/delivery was never enabled; only policy and failure handling were tested.
+Final serial source checks passed: CPU ran 617 tests in 23.111 seconds with
+10 skips; GPU environment ran 617 in 21.621 seconds with 6 skips. Both treated
+`ResourceWarning` as an error. Five Node syntax checks exited 0. Logs:
+`.runtime/final-push-checkpoint-20261021/{cpu-full,gpu-full,node-syntax}.log`.
+The CPU `.venv` has Starlette 1.3.1; separate fresh/overlay evidence in
+`RELEASE_READINESS.md` covers the 1.8.0 declared minimum.
 
-Real Small-model DirectML export on latest8774 completed without fallback, requested
-256 and actual252x140, custom filename and PNG640x180. Evidence is under
-.runtime/continuation-verification/: latest-gpu-naming.json/.png,
-browser-naming-job.json, live-naming.json, keyboard-job.json and screenshots.
+## Local review packet and dependency evidence
 
-Responsive QA used a temporary same-origin iframe harness at320/375/768 CSS pixels.
-No document horizontal overflow or out-of-bounds buttons/inputs/selects/queue rows;
-long filenames and actions wrapped. This is embedded desktop-engine CSS evidence,
-not physical phone/touch/display proof. The harness was moved out of static/ into
-continuation-verification beside responsive-metrics.json and naming-responsive*.png.
+`output/release-review-2026-10-21/REVIEW.md` and `evidence-index.json` record the
+candidate, report hashes and limits. The fixed earlier `source-snapshot.zip`
+contains 144 source entries plus manifest/environment records; SHA-256:
+`6e8204f5152213ad5da47fcb64cc02e184883973ff5c0bbf008b2c43214870d9`.
+It predates this wrap-up and is not a replacement for the final Git commit.
+Its environment inventory is not a dependency lock or complete frozen SBOM.
 
-## GPU pixel gate remains inconclusive
+All 97 native entries were matched to local copies. Independent comparison with
+the official Python 3.12.10 embeddable ZIP found 24 native byte matches among 26
+overlapping names; two candidate VC runtime DLLs differ, and 71 other native
+entries are outside that comparison. Package checksum/SPDX and aggregate-license
+matches are recorded in `output/release-review-2026-10-21/cpython312-package-comparison.json`.
+This establishes package-byte identity for the subset, not every upstream build
+input or redistribution entitlement. All 48 candidate root CRT/API-set files
+match Codex runtime copies; that directory does not identify their source agreement.
 
-Do not relax or overwrite the failed strict clip gate:
-.runtime/clip-verification/20261018T113023Z-3a3457b7/report.json.
-Two ordinary matched exports themselves differed; the processed clip matched the
-second ordinary export exactly. Earlier detailed metrics remain in the archived
-handoff and .runtime/resume-verification/gpu-clip-independent.json.
+The incomplete notice review is
+`output/release-notices-deduplicated-review-2026-10-21-r4.zip`, SHA-256
+`c593d4317079f6195f8fa085718d42ae2ad4d1227abc733541a4cc7d772b0778`.
+Its 62 aliases and 54 verified payloads include 22 embedded notices. The
+supplementary draft is unapproved and is not in the EXE.
+DirectML matches the published ONNX Runtime DirectML 1.24.4 CPython 3.12 wheel
+and RECORD; the same-version NuGet DLL differs. Terms/notice applicability,
+Microsoft CRT/UCRT provenance and entitlement, native transitive attribution,
+OpenCV/FFmpeg/GCC/Winpthreads object attribution, upstream OpenSSL/libffi build
+inputs, setuptools frozen-version/NOTICE scope, and model/conversion terms need
+owner/reviewer resolution. Exact source links and qualifications are in
+`RELEASE_DEPENDENCIES.md`.
 
-New diagnostic scripts/isolate_gpu_variance.py reuses production stages with a
-pinned generated36-frame Small-model proxy, one owned session and fresh temporal
-history for each repeat. GPU report:
-.runtime/variance-isolation/20261018T161848Z-05a358b7/report.json.
-Only the first raw ONNX frame differed between repeat1 and repeats2/3:
-max1.9073486328125e-6,34865 values. Temporal effects spanned11 frames; rendered BGR
-changed only4 channel values by1. Repeats2/3 matched exactly at all captured stages.
-Identical fixed-input libx264 and NVENC encode pairs had identical file hashes and
-all36 decoded frames within each codec. Coordinator recomputed arrays/metrics and
-rehashed/decoded outputs: continuation-verification/independent-variance.json.
+A separate Python 3.14.9 candidate remains unpromoted at
+`.runtime/python314-compatibility-review/dist-python314/StereoLab.exe`;
+99,782,837 bytes; SHA-256
+`e5afd208495e9b1690fb0bd75cefb692e367195f2e9c8761060595cbf79b190e`.
+It has separate suite, generated approximation, provenance and notice evidence.
+Its smoke reports `gpu_verified=false`; NVENC only encoded the video.
+Python 3.12 results do not transfer to it.
 
-CPU diagnostic20261018T163225Z-f5a4316b matched exactly at every stage in all three
-repeats and produced identical libx264 files. A diagnostic CPU-mode bug that still
-probed NVENC was fixed with regression tests; CPU now avoids hardware probing.
-Independent check: continuation-verification/cpu-variance-independent.json.
-These observations do not establish preprocessed tensor identity, universal GPU
-determinism, or a production warmup/comparison policy. App defaults were unchanged.
+## Remaining release gates and resumption
 
-## Historical Phase4.1 foundation — before application integration
+1. Obtain the owner's project-license and delivery-model choice; reconcile pinned
+   model terms, including non-commercial Base/Large and Xenova conversion rights.
+2. Resolve dependency provenance/notice scope and approve complete delivery
+   materials for the chosen exact candidate. Current drafts are review inputs.
+3. Observe the final artifact on a clean standard Windows account or machine,
+   with supplied FFmpeg, fresh model acceptance/download, generated outputs,
+   retrieval/restart and shutdown. Local VM/Sandbox discovery did not provide
+   a usable clean environment; optional-feature state was not established.
+4. Exercise an actual screen reader. Current Chromium/source checks do not prove
+   spoken announcements or broad assistive-technology behavior.
+5. Play the generated sample through physical XREAL 1S glasses when available.
+   File geometry alone does not establish stereo, aspect ratio or audio playback.
+6. Freeze approved source/build inputs, rebuild, verify that exact artifact,
+   record its checksum/version/notes, and obtain final release authorization.
 
-At this earlier checkpoint job_history.py was a standalone opt-in SQLite metadata
-store. The following describes that checkpoint, superseded above. App jobs then
-still disappeared after a server restart; the proposed environment variable/API/UI
-in plans/job-history.md are not active app features. No sources are retained,
-read or deleted by the module, and no Job/queue objects are reconstructed.
+Generated-only scope leaves natural-scene depth quality and real-footage AV sync
+unverified. Do not replace a running user EXE or control unrelated app instances.
+Run source checks serially in PowerShell from the repository root:
 
-Implemented foundation: strict stable instance namespace; non-inheritable OS-held
-lease; schema1/finite bounded metadata and exact settings/naming; atomic admission,
-pending edits and terminal records; interrupted prior-boot history; validated
-read-only pagination and confined completed-output lookup; metadata-only pruning
-(default1000 records/90 days); degraded writes with preserved readable history.
-Invalid rows remain preserved and visibly warn. Corrupt/future schemas are preserved.
+```powershell
+.\.venv\Scripts\python.exe -W error::ResourceWarning -m unittest discover -s tests -q
+.\.venv-gpu\Scripts\python.exe -W error::ResourceWarning -m unittest discover -s tests -q
+node --check static/app.js
+git diff --check
+```
 
-Review caught and fixed startup-exception lease leaks, dangling database link
-creation, and cross-namespace database/lease hardlinks. Real Windows subprocess
-contention, owner exit, stale lock contents, crash before/after completion commit,
-non-inherited generic exec child and hardlink tests passed. Of25 focused tests,
-24 passed and one real symlink-creation test skipped for Windows privilege1314;
-a separate mocked dangling-link-before-connect test passes. POSIX locking and real
-symlink rejection still need execution evidence. Lookup checks size, not a content
-hash; hostile filesystem replacement races are outside this cooperative local scope.
-
-Exact adapter API and deferred work are documented in plans/job-history.md.
-Next: design startup/shutdown ownership so a lease cannot be released while a
-worker can still mutate records; stream source hashes; pre-upload capacity checks;
-durable admission/queued edits before in-memory publication; coarse lifecycle
-writes and degraded status mapping; separate prior-boot read-only API/UI. Then
-verify an isolated CPU server restart/download end to end. Never revive old JOBS,
-automatically requeue, retain sources implicitly or claim arbitrary-frame resume.
-
-## Earlier independent checks
-
-CPU:350 tests in11.661s, OK with one skipped real symlink-creation test.
-GPU environment:350 tests in11.766s, same expected skip. No remaining failures.
-Logs: .runtime/continuation-verification/final-cpu-tests.log and
-final-gpu-env-tests.log. Compileall, Node syntax, git diff--check and changed-text
-checks including untracked files pass. Earlier integrated-* logs captured the
-history module's in-progress red stubs and are superseded by these final logs.
-
-The suites contain mocked neural sessions plus real CPU/FFmpeg/process checks;
-real DirectML evidence is separate above. No new EXE build, clean-machine test,
-physical display proof, multi-hour reliability or universal quality claim.
-At the previous handoff all worker lanes were released and the20 changed/new
-source/docs/tests were ready for the separately documented `cba8716` commit.
-
-## Earlier roadmap gates (first gate now completed)
-
-1. Integrate the standalone history foundation under its frozen failure/ownership
-   contract, with a separate read-only history UI and explicit source reselection.
-2. Continue GPU variance investigation without changing the failed comparison gate.
-3. Test representative authorized footage, longer stress workloads, physical target
-   displays, touch/accessibility and actual browser/OS notification delivery.
-4. Whole-export/model/encoder calibration still needs its own bounded spec. Current
-   calibration measures input detail on one proxy frame only.
-5. Projects, reusable depth, pause/checkpoints and true resume remain separate.
-   Neither renderer_quality.py nor temporal_quality.py prototype is promoted.
-6. Rebuild the EXE only with actual launch/runtime validation when requested.
-
-Useful gates: .venv/Scripts/python.exe -m unittest discover -s tests -q;
-.venv-gpu/Scripts/python.exe -m unittest discover -s tests -q;
-node --check static/app.js. Do not restart old services merely to refresh source.
+A new build needs a fresh private directory, captured dependencies, its own identity
+and candidate-specific acceptance. Some `scripts/` verifiers need local `.runtime/`
+fixtures/models absent from GitHub. Final EXE promotion requires the gates above.

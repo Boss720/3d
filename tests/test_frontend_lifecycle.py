@@ -50,6 +50,9 @@ class FrontendLifecycleTests(unittest.TestCase):
     def test_queue_pause_controls_follow_confirmed_server_state(self):
         self.run_lifecycle("queue-controls")
 
+    def test_background_terminal_jobs_are_announced_accessibly(self):
+        self.run_lifecycle("queue-terminal-announcement")
+
     def test_storage_cleanup_requires_explicit_selection(self):
         self.run_lifecycle("storage-controls")
 

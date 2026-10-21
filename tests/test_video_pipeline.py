@@ -310,6 +310,46 @@ class PipelineTests(unittest.TestCase):
             with self.subTest(size=size), self.assertRaises(ValueError):
                 run_pipeline([], lambda frame: frame, lambda *_: None, threading.Event(), queue_size=size)
 
+    def test_failure_unblocks_owned_io_before_joining_render_worker(self):
+        entered = threading.Event()
+        release = threading.Event()
+        stopped = threading.Event()
+        returned = threading.Event()
+        errors = []
+        original = RuntimeError('native inference failed')
+
+        def infer(frame):
+            if frame == 1:
+                self.assertTrue(entered.wait(2))
+                raise original
+            return frame
+
+        def consume(*_):
+            entered.set()
+            release.wait(3)
+
+        def stop_io():
+            stopped.set()
+            release.set()
+
+        def run():
+            try:
+                run_pipeline(range(3), infer, consume, threading.Event(), on_stop=stop_io)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                returned.set()
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        try:
+            self.assertTrue(returned.wait(2), 'failure must stop owned I/O before joining')
+            self.assertTrue(stopped.is_set(), repr(errors))
+            self.assertEqual(errors, [original])
+        finally:
+            release.set()
+            thread.join(3)
+
 
 if __name__ == '__main__':
     unittest.main()

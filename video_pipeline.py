@@ -29,6 +29,7 @@ def run_pipeline(
     cancel_event: threading.Event,
     queue_size: int = 2,
     timings=None,
+    on_stop=None,
 ) -> int:
     """Process frames in order with exactly one inference call at a time.
 
@@ -46,6 +47,9 @@ def run_pipeline(
     terminate its encoder on cancellation to release a blocked pipe write.
     This function waits for any in-progress callback rather than allowing a
     worker to continue writing after return.
+
+    on_stop, when provided, stops caller-owned I/O before workers are joined
+    after failure/cancellation. It must be finite and safe to call once.
     """
     if isinstance(queue_size, bool) or not isinstance(queue_size, int) or queue_size < 1:
         raise ValueError('queue_size must be a positive integer')
@@ -164,6 +168,11 @@ def run_pipeline(
     finally:
         if not completed_inference:
             stop.set()
+        if (stop.is_set() or cancel_event.is_set()) and on_stop is not None:
+            try:
+                on_stop()
+            except BaseException as error:
+                fail(error)
         for worker in started:
             worker.join()
 

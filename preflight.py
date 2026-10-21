@@ -79,13 +79,23 @@ def video_metadata(capture) -> tuple[int, int, int | None, float, bool]:
     return int(width), int(height), total_frames, fps if fps is not None else 30.0, fps is None
 
 
-def _read_video(source: Path, warnings: list[str]) -> tuple[int, int, int | None, float, bool]:
+def open_preflight_capture(source, ffmpeg, cancel_event=None):
+    # Local import also keeps metadata normalization usable by legacy adapters.
+    from video_decoder import open_video_capture
+    return open_video_capture(source, ffmpeg, cancel_event=cancel_event, prefer_hardware=False)
+
+
+def _read_video(source: Path, warnings: list[str], ffmpeg: str,
+                cancel_event=None) -> tuple[int, int, int | None, float, bool]:
     capture = None
     try:
-        capture = cv2.VideoCapture(str(source))
+        capture = open_preflight_capture(source, ffmpeg, cancel_event)
         if not capture.isOpened():
             raise RuntimeError('Could not open this video. Re-encode it as H.264 MP4 and retry.')
         width, height, total_frames, fps, fps_provisional = video_metadata(capture)
+        probe = getattr(capture, 'probe', None)
+        if isinstance(probe, dict):
+            fps_provisional = bool(probe.get('fps_provisional', fps_provisional))
         ok, frame = capture.read()
         if not ok or frame is None:
             raise RuntimeError('The first video frame could not be decoded. Re-encode it as H.264 MP4 and retry.')
@@ -132,7 +142,7 @@ def _disk_budget(output_dir: Path) -> int:
 
 
 def inspect_media(source: Path, media_type: str, layout: str, resolution: str,
-                  output_dir: Path, ffmpeg: str | None) -> dict:
+                  output_dir: Path, ffmpeg: str | None, *, cancel_event=None) -> dict:
     """Check readable media, dimensions, encoder and destination before inference.
 
     Only the first video frame is decoded; later corrupt frames can still fail.
@@ -163,7 +173,10 @@ def inspect_media(source: Path, media_type: str, layout: str, resolution: str,
         source_width, source_height = _decoded_size(image)
         total_frames, fps, fps_provisional = 1, None, False
     else:
-        source_width, source_height, total_frames, fps, fps_provisional = _read_video(source, warnings)
+        if not ffmpeg:
+            raise RuntimeError('Install FFmpeg or set VIDEO3D_FFMPEG before converting video.')
+        source_width, source_height, total_frames, fps, fps_provisional = _read_video(
+            source, warnings, ffmpeg, cancel_event)
         _check_encoder(ffmpeg)
     output_width, output_height = _output_dimensions(source_width, source_height, media_type, layout, resolution)
     free = _disk_budget(Path(output_dir))

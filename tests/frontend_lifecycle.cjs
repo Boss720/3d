@@ -295,6 +295,21 @@ async function run(scenario) {
     f.network(async url => {if(url === '/api/jobs')return response([]);throw new Error('control unavailable');});
     await app.pollJobs();assert.equal(app.ui.pauseQueue.disabled,true);
     assert.match(app.ui.queuePauseStatus.textContent,/control unavailable/);
+  } else if (scenario === 'queue-terminal-announcement') {
+    app.seed([
+      {uid:'failed',jobId:'failed',name:'bad.mp4',mediaType:'video',state:'processing'},
+      {uid:'complete',jobId:'complete',name:'good.mp4',mediaType:'video',state:'processing'},
+    ]);
+    const failed={...job('failed'),id:'failed',filename:'bad.mp4',error:'Decoder stopped'};
+    const completed={...job('completed'),id:'complete',filename:'good.mp4'};
+    f.network(async url => url === '/api/jobs' ? response([failed,completed]) : response({paused:false,pending_count:0}));
+    await app.pollJobs();
+    assert.match(app.ui.queueLiveStatus.textContent,/2 queue items reached a final status/i);
+    assert.match(app.ui.queueLiveStatus.textContent,/bad\.mp4: Conversion failed\. Decoder stopped/);
+    assert.match(app.ui.queueLiveStatus.textContent,/good\.mp4: Conversion complete\./);
+    await app.pollJobs();
+    assert.equal(app.state().items[0].state,'failed');
+    assert.equal(app.state().items[1].state,'completed');
   } else if (scenario === 'storage-controls') {
     let cleanups=0;
     const candidate={path:'C:\\data\\uploads\\orphan.png',bytes:123,category:'uploads'};

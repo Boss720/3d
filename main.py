@@ -32,6 +32,9 @@ from starlette.concurrency import run_in_threadpool
 
 from depth_engine import ModelManager
 from depth_engine import MODEL_SPECS
+from build_identity import SOURCE_COMPONENTS, build_fingerprint
+from depth_cache import DepthCache, CacheError
+from depth_cache_identity import build_cache_key, hash_source, frame_digest
 from job_queue import EditableJobQueue
 from local_workspace import (storage_inventory, cleanup_temporary_files,
                              validate_output_directory, open_folder, reveal_file)
@@ -52,6 +55,7 @@ from video_encoder import select_encoder_profile
 from video_pipeline import PipelineCancelled, run_pipeline
 from video_depth import VideoDepthEstimator
 from video_decoder import DecoderCancelled, open_video_capture
+from upload_admission import UploadAdmissionMiddleware
 
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -83,6 +87,9 @@ CALIBRATION_UPLOAD_BYTES = 24 * 1024 * 1024
 MULTIPART_OVERHEAD_BYTES = 256 * 1024
 ETA_MIN_FRAMES = 5
 ETA_MIN_SECONDS = 2.0
+MAX_PENDING_JOBS = 32
+MAX_STAGED_UPLOADS = 4
+MAX_SESSION_JOBS = 512
 
 for directory in (UPLOADS, MODELS, OUTPUTS):
     directory.mkdir(parents=True, exist_ok=True)
@@ -90,6 +97,8 @@ for directory in (UPLOADS, MODELS, OUTPUTS):
 DEPTH_ENGINE = ModelManager(MODELS)
 EXECUTION_LOCAL = threading.local()
 PREVIEW_CACHE = PreviewDepthCache()
+VIDEO_DEPTH_CACHE: DepthCache | None = None
+DEPTH_CACHE_START_LOCK = threading.Lock()
 CALIBRATIONS = CalibrationStore(RUNTIME / 'calibrations.json')
 
 
@@ -120,17 +129,12 @@ def find_ffmpeg() -> str | None:
 
 
 FFMPEG_PATH = find_ffmpeg()
-_SOURCE_COMPONENTS = ('main.py', 'depth_engine.py', 'stereo.py', 'video_encoder.py',
-                      'video_pipeline.py', 'preview_cache.py', 'telemetry.py', 'preflight.py',
-                      'calibration.py', 'resource_sampling.py', 'preview_policy.py', 'preview_clip.py',
-                      'job_queue.py', 'job_settings.py', 'output_naming.py', 'job_history.py', 'local_workspace.py',
-                      'video_depth.py', 'video_decoder.py', 'onnx_optimization.py')
-APP_BUILD_FINGERPRINT = (hashlib.sha256(b''.join((ROOT / name).read_bytes() for name in _SOURCE_COMPONENTS)).hexdigest()
-                         if all((ROOT / name).is_file() for name in _SOURCE_COMPONENTS) else None)
+_SOURCE_COMPONENTS = SOURCE_COMPONENTS
+APP_BUILD_FINGERPRINT = build_fingerprint(ROOT, frozen=FROZEN)
 JOBS: dict[str, "Job"] = {}
 JOBS_LOCK = threading.RLock()
 STAGED_UPLOADS: set[Path] = set()
-JOB_QUEUE = EditableJobQueue()
+JOB_QUEUE = EditableJobQueue(maxsize=MAX_PENDING_JOBS)
 WORKER: threading.Thread | None = None
 WORKER_START_LOCK = threading.Lock()
 WORKER_STOP = threading.Event()
@@ -158,6 +162,9 @@ class Job:
     execution_mode: str = "auto"
     depth_interval: int = 1
     video_decode: str = 'software'
+    use_depth_cache: bool = False
+    depth_cache: dict[str, Any] = field(default_factory=lambda: {
+        'state': 'disabled', 'frames': 0, 'bytes': 0, 'warning': None})
     decoder: dict[str, Any] = field(default_factory=dict)
     execution: dict[str, Any] = field(default_factory=dict)
     first_execution: dict[str, Any] = field(default_factory=dict)
@@ -288,6 +295,7 @@ class Job:
             "execution_mode": self.execution_mode,
             "depth_interval": self.depth_interval,
             "video_decode": self.video_decode,
+            "depth_cache": dict(self.depth_cache),
             "execution": dict(self.execution),
             "first_execution": dict(self.first_execution),
             "pipeline": self.pipeline,
@@ -486,6 +494,37 @@ def stop_process(proc: subprocess.Popen[bytes] | None) -> None:
             pass
 
 
+def stop_video_encoder(proc: subprocess.Popen[bytes], reader: threading.Thread) -> None:
+    """Stop one owned export encoder and close its pipes after the stderr reader exits."""
+    if proc.poll() is None:
+        stop_process(proc)
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    if proc.stdin is not None:
+        try:
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+    if reader.ident is not None:
+        reader.join(timeout=2)
+    reader_stopped = not reader.is_alive()
+    if reader_stopped and proc.stderr is not None:
+        try:
+            proc.stderr.close()
+        except (OSError, ValueError):
+            pass
+    if proc.poll() is None or not reader_stopped:
+        raise RuntimeError('Video encoder cleanup failed: owned process or stderr reader survived the shutdown timeout.')
+
+
 def cleanup_job_file(job: Job, path: Path, label: str) -> None:
     """Keep cleanup errors separate from the actual conversion outcome."""
     try:
@@ -553,22 +592,223 @@ def decoder_stopped_early(expected_frames: int | None, decoded_frames: int,
     return shortfall > max(tolerance_frames, math.ceil(expected_frames * 0.001))
 
 
-def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) -> Path:
+class CacheReplayError(Exception):
+    """A cache cannot describe this decode; restart once from original inference."""
+
+
+def get_video_depth_store() -> DepthCache:
+    global VIDEO_DEPTH_CACHE
+    with DEPTH_CACHE_START_LOCK:
+        if VIDEO_DEPTH_CACHE is None:
+            VIDEO_DEPTH_CACHE = DepthCache(RUNTIME / 'depth-cache')
+        return VIDEO_DEPTH_CACHE
+
+
+class VideoDepthCacheSession:
+    """Own a cache lease for one complete attempt, including encoder finalization."""
+
+    def __init__(self, job: Job, store=None, bypass: bool = False):
+        self.job = job
+        self.store = store
+        self.bypass = bypass
+        self.reader = self.writer = None
+        self.key = None
+        self.frames = 0
+        self.bytes = 0
+        self.execution = {}
+        self.estimated_bytes = None
+
+    def status(self, state, warning=None, **extra):
+        self.job.depth_cache = {'state': state, 'frames': self.frames, 'bytes': self.bytes,
+                                'warning': warning, 'estimated_bytes': self.estimated_bytes, **extra}
+
+    def unavailable(self, error):
+        warning = f'Depth reuse unavailable: {error}'[:400]
+        self.status('unavailable', warning)
+        if self.writer is not None:
+            writer, self.writer = self.writer, None
+            try:
+                writer.abort()
+            except (CacheError, OSError, ValueError):
+                self.status('unavailable', warning + ' Partial cache cleanup can be retried in Local storage.')
+
+    def start(self, source, width, height, fps, decoder):
+        job = self.job
+        if not job.use_depth_cache:
+            self.status('disabled')
+            return
+        if self.bypass:
+            self.status('unavailable', 'Cached frames did not match this decode; rendering again with fresh depth.')
+            return
+        if job.purpose != 'export' or job.media_type != 'video' or job.depth_mode not in NEURAL_MODES:
+            self.status('ineligible', 'Depth reuse is available for ordinary named-model video exports.')
+            return
+        if APP_BUILD_FINGERPRINT is None:
+            self.status('unavailable', 'Depth reuse requires a verified app build identity. Rendered output is unaffected.')
+            return
+        try:
+            if self.store is None:
+                self.store = get_video_depth_store()
+            # Verify exact bytes for both source and model. A receipt or filename
+            # alone cannot authorize reuse of a replaced model or changed source.
+            source_hash = hash_source(source, job.cancel_event)
+            model_hash = hash_source(MODELS / job.depth_mode / 'model.onnx', job.cancel_event)
+            if model_hash != MODEL_SPECS[job.depth_mode]['sha256']:
+                raise CacheError('Installed model bytes do not match the pinned model.')
+            runtime = DEPTH_ENGINE.runtime_info()
+            runtime_identity = {name: runtime.get(name) for name in
+                                ('version', 'providers', 'gpu_device', 'capabilities')}
+            runtime_identity['opencv'] = cv2.__version__
+            self.key = build_cache_key(
+                source_hash, model_id=job.depth_mode, model_sha256=model_hash,
+                input_size=job.input_size, execution_mode=job.execution_mode,
+                working_size=(width, height), fps=fps, invert_depth=job.invert_depth,
+                temporal_smoothing=job.temporal_smoothing, depth_interval=job.depth_interval,
+                decoder_identity={name: decoder.get(name) for name in
+                                  ('backend', 'hardware', 'adapter_id', 'adapter_name')},
+                runtime_identity=runtime_identity,
+                pipeline_version=f'native-temporal-v1:{APP_BUILD_FINGERPRINT}')
+            warning = None
+            try:
+                self.reader = self.store.open_reader(self.key)
+            except (CacheError, OSError, ValueError) as exc:
+                warning = f'Previous depth entry was rejected: {exc}'[:400]
+            if self.reader is not None:
+                if self.reader.metadata.get('stored_stage') != 'native-temporal-v1':
+                    raise CacheError('The saved depth stage is incompatible.')
+                self.execution = self.reader.metadata.get('execution', {})
+                if type(self.execution) is not dict:
+                    raise CacheError('The saved execution record is invalid.')
+                self.status('hit')
+            else:
+                self.writer = self.store.begin(self.key)
+                self.status('miss', warning)
+        except InterruptedError as exc:
+            raise JobCancelled() from exc
+        except (CacheError, OSError, ValueError) as exc:
+            self.close()
+            self.unavailable(exc)
+
+    def read(self, frame):
+        if self.reader is None:
+            return None
+        try:
+            depth = self.reader.read(frame_digest(frame))
+            if depth.ndim != 2 or not depth.size or not np.isfinite(depth).all():
+                raise CacheError('Saved native depth must contain a nonempty finite 2D map.')
+        except (CacheError, OSError, ValueError) as exc:
+            raise CacheReplayError(str(exc)) from exc
+        self.frames += 1
+        self.bytes += depth.nbytes
+        self.status('hit')
+        # The original provider describes the saved computation. This attempt
+        # does no neural inference; publish that distinction explicitly.
+        execution = {'requested_mode': self.job.execution_mode, 'active_provider': None,
+                     'device': 'cpu', 'gpu_verified': False, 'fallback_reason': None,
+                     'depth_cache_hit': True, 'cached_execution': self.execution,
+                     'temporal_width': depth.shape[1], 'temporal_height': depth.shape[0],
+                     'video_depth_stats': {'frames': self.frames, 'neural_frames': 0,
+                                          'flow_frames': 0, 'cached_frames': self.frames}}
+        set_job(self.job.id, execution=execution)
+        self.job.execution = execution
+        if not self.job.first_execution:
+            self.job.first_execution = dict(execution)
+        return depth
+
+    def append(self, frame, depth, execution):
+        if self.writer is None:
+            return
+        if execution.get('fallback_reason'):
+            self.unavailable('Temporary CPU fallback results are not retained.')
+            return
+        try:
+            if self.frames == 0 and self.job.total_frames:
+                # Conservative first-map projection: frame geometry is known
+                # only after inference, and container frame counts can vary.
+                self.estimated_bytes = self.job.total_frames * (depth.nbytes + 512) + 256 * 1024
+                if self.estimated_bytes > self.store.quota_bytes:
+                    self.unavailable('Estimated depth storage exceeds the 2 GiB cache quota; exporting without reuse.')
+                    return
+            self.writer.append(depth, frame_digest(frame))
+            self.frames += 1
+            self.bytes += depth.nbytes
+            self.execution = dict(execution)
+            self.status('writing')
+        except (CacheError, OSError, ValueError) as exc:
+            self.unavailable(exc)
+
+    def check_complete(self):
+        if self.reader is not None and self.frames != self.reader.frame_count:
+            raise CacheReplayError('The decoded frame count differs from the saved depth.')
+
+    def finish(self):
+        self.check_complete()
+        if self.job.cancel_event.is_set():
+            raise JobCancelled()
+        if self.writer is not None:
+            writer, self.writer = self.writer, None
+            try:
+                with JOBS_LOCK:
+                    if self.job.cancel_event.is_set():
+                        self.writer = writer
+                        raise JobCancelled()
+                    writer.finish({'execution': self.execution, 'stored_stage': 'native-temporal-v1'})
+                self.status('stored')
+            except (CacheError, OSError, ValueError) as exc:
+                try:
+                    writer.abort()
+                except (CacheError, OSError, ValueError):
+                    pass
+                self.unavailable(exc)
+
+    def close(self):
+        if self.reader is not None:
+            reader, self.reader = self.reader, None
+            try:
+                reader.close()
+            except (CacheError, OSError, ValueError) as exc:
+                self.unavailable(exc)
+        if self.writer is not None:
+            writer, self.writer = self.writer, None
+            try:
+                writer.abort()
+                self.status('unavailable', 'Incomplete depth was not saved.')
+            except (CacheError, OSError, ValueError) as exc:
+                self.unavailable(exc)
+
+
+def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False,
+              _cache_bypass: bool = False) -> Path:
     ffmpeg = FFMPEG_PATH
     if not ffmpeg or not Path(ffmpeg).is_file():
         raise RuntimeError("FFmpeg was not found. Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.")
     source = job.preview_source_path or job.input_path
+    cache = VideoDepthCacheSession(job, bypass=_cache_bypass)
     try:
-        capture = open_video_capture(source, ffmpeg, software_capture_factory=cv2.VideoCapture,
-                                     cancel_event=job.cancel_event, prefer_hardware=job.video_decode == 'amd')
+        capture = open_video_capture(source, ffmpeg, cancel_event=job.cancel_event,
+                                     prefer_hardware=job.video_decode == 'amd')
     except DecoderCancelled as exc:
         raise JobCancelled() from exc
     try:
         info = getattr(capture, 'decoder_info', None)
         if isinstance(info, dict):
             set_job(job.id, decoder=dict(info))
-        return run_video_capture(job, net, ffmpeg, source, capture, _force_software)
+        try:
+            return run_video_capture(job, net, ffmpeg, source, capture, _force_software, cache)
+        except CacheReplayError:
+            if _cache_bypass:
+                raise
+            # Entire temporal sequence must restart; mixing cached history and
+            # fresh estimates midway through a stream would change the result.
+            cache.close()
+            capture.release()
+            job.first_execution = {}
+            set_job(job.id, execution={}, frames_processed=0, video_started_monotonic=None,
+                    retry_count=job.retry_count + 1, phase='retrying',
+                    retry_reason='Depth cache did not match decoded frames; restarting with fresh depth')
+            return run_video(job, net, _force_software, _cache_bypass=True)
     finally:
+        cache.close()
         # Own the whole capture lifetime, including metadata and encoder setup.
         capture.release()
         info = getattr(capture, 'decoder_info', None)
@@ -577,14 +817,18 @@ def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False) 
 
 
 def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Path,
-                      capture, _force_software: bool) -> Path:
+                      capture, _force_software: bool, cache=None) -> Path:
     if not capture.isOpened():
         raise RuntimeError("Could not open this video. The file may use an unsupported codec or be damaged.")
 
     source_width, source_height, total_frames, source_fps, _ = video_metadata(capture)
     metadata_total_frames = total_frames
     set_job(job.id, total_frames=total_frames, frames_processed=0)
-    fps = ffprobe_fps(ffmpeg, source, source_fps)
+    probe = getattr(capture, 'probe', None)
+    # The decoder's timestamp resampling rate must also drive rawvideo encoding
+    # and cache identity. Legacy injected captures have no owned probe record.
+    fps = source_fps if isinstance(probe, dict) else ffprobe_fps(ffmpeg, source, source_fps)
+    fps_spec = probe.get('fps_ratio', f'{fps:.8f}') if isinstance(probe, dict) else f'{fps:.8f}'
 
     scale = min(1.0, 1920.0 / source_width, 1080.0 / source_height) if job.resolution == "1080p" else 1.0
     width = max(2, int(round(source_width * scale / 2.0) * 2))
@@ -594,6 +838,9 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
     if job.layout == "HALFTB":
         height = max(4, height // 4 * 4)
     output_width, output_height = layout_size(width, height, job.layout)
+    if cache is not None:
+        info = getattr(capture, 'decoder_info', {})
+        cache.start(source, width, height, fps, info if isinstance(info, dict) else {})
     target = output_path_for(job)
     encoder_profile = select_encoder_profile(ffmpeg, job.quality)
     encoder_args = encoder_profile.software_fallback_args if _force_software else encoder_profile.video_args
@@ -604,14 +851,23 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
     )
     set_job(job.id, encoder=encoder_name, progress=1, message="Preparing video encoder")
 
+    video_offset = (max(0.0, probe['video_start_seconds'] - probe['format_start_seconds'])
+                    if isinstance(probe, dict) else 0.0)
+    # An input -itsoffset rounds to the raw frame time base (seconds at low
+    # FPS). Shift in a microsecond filter/encoder time base instead.
+    timeline_args = (['-vf', f'settb=AVTB,setpts=PTS+{video_offset:.9f}/TB',
+                      '-enc_time_base:v', '1:1000000'] if video_offset else [])
+
     command = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-f", "rawvideo", "-pixel_format", "bgr24",
         "-video_size", f"{output_width}x{output_height}",
-        "-framerate", f"{fps:.8f}", "-i", "pipe:0",
+        "-framerate", fps_spec, "-i", "pipe:0",
         "-i", str(source),
         "-map", "0:v:0", "-map", "1:a?",
         *encoder_args,
+        *timeline_args,
+        "-fps_mode:v", "passthrough",
         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", str(target),
     ]
@@ -641,10 +897,11 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         native_estimator = (VideoDepthEstimator(job.depth_interval, job.temporal_smoothing)
                             if job.depth_mode in NEURAL_MODES else None)
         renderer = StereoRenderer()
-    except Exception:
-        stop_process(proc)
-        if reader.is_alive():
-            reader.join(timeout=2)
+    except Exception as exc:
+        try:
+            stop_video_encoder(proc, reader)
+        except Exception as cleanup_error:
+            exc.video_cleanup_error = str(cleanup_error)
         raise
 
     def source_frames():
@@ -671,6 +928,11 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
     def infer_frame(frame):
         if job.cancel_event.is_set():
             raise JobCancelled()
+        if cache is not None:
+            with job.timings.measure('depth_cache_read'):
+                cached_depth = cache.read(frame)
+            if cached_depth is not None:
+                return cached_depth
         with job.timings.measure("depth"):
             if native_estimator is not None:
                 def predict_native(source_frame):
@@ -689,6 +951,9 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         set_job(job.id, execution=execution)
         if not job.first_execution:
             set_job(job.id, first_execution=dict(execution))
+        if cache is not None:
+            with job.timings.measure('depth_cache_write'):
+                cache.append(frame, depth, execution)
         return depth
 
     def consume_frame(frame, depth):
@@ -720,9 +985,17 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
 
     try:
         frames = source_frames()
+        def stop_video_io():
+            # Stop both owned children before pipeline joins. A failed inference
+            # must unblock a decoder read as well as an encoder pipe write.
+            stop = getattr(capture, 'stop', None)
+            if callable(stop):
+                stop()
+            stop_process(proc)
         if job.execution_mode in {"auto", "hybrid"} and job.depth_mode in NEURAL_MODES:
             set_job(job.id, pipeline="overlapped")
-            run_pipeline(frames, infer_frame, consume_frame, job.cancel_event, queue_size=2, timings=job.timings)
+            run_pipeline(frames, infer_frame, consume_frame, job.cancel_event, queue_size=2,
+                         timings=job.timings, on_stop=stop_video_io)
         else:
             try:
                 for frame in frames:
@@ -731,6 +1004,8 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
                 frames.close()
 
         capture.release()
+        if cache is not None:
+            cache.check_complete()
         if frame_index == 0:
             stop_process(proc)
             raise RuntimeError("No video frames could be decoded.")
@@ -753,17 +1028,23 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
             detail = b"".join(stderr_lines).decode("utf-8", errors="replace").strip()
             detail = detail[-1200:] or f"FFmpeg exited with code {return_code}."
             if encoder_profile.codec == "h264_nvenc" and not _force_software:
+                if cache is not None:
+                    cache.close()
                 capture.release()
                 target.unlink(missing_ok=True)
                 set_job(job.id, process=None, encoder="CPU libx264 (NVENC fallback)",
                         progress=1, frames_processed=0, video_started_monotonic=None,
                         phase="retrying", retry_count=job.retry_count + 1, retry_reason="NVENC export failed; restarting with libx264",
                         message="NVIDIA encoding failed; retrying this export with the CPU encoder")
-                return run_video(job, net, _force_software=True)
+                return run_video(job, net, _force_software=True,
+                                 _cache_bypass=bool(cache and cache.bypass))
             raise RuntimeError(detail)
         if not target.is_file() or target.stat().st_size == 0:
             raise RuntimeError("FFmpeg finished without producing an output file.")
         set_job(job.id, frames_processed=frame_index, total_frames=metadata_total_frames)
+        if cache is not None:
+            with job.timings.measure('depth_cache_finalize'):
+                cache.finish()
         return target
     except (PipelineCancelled, DecoderCancelled) as exc:
         raise JobCancelled() from exc
@@ -774,19 +1055,32 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
             raise JobCancelled() from exc
         detail = b"".join(stderr_lines).decode("utf-8", errors="replace").strip()
         if encoder_profile.codec == "h264_nvenc" and not _force_software:
+            if cache is not None:
+                cache.close()
             capture.release()
             target.unlink(missing_ok=True)
             set_job(job.id, process=None, encoder="CPU libx264 (NVENC fallback)",
                     progress=1, frames_processed=0, video_started_monotonic=None,
                     phase="retrying", retry_count=job.retry_count + 1, retry_reason="NVENC pipe stopped; restarting with libx264",
                     message="NVIDIA encoding stopped; retrying this export with the CPU encoder")
-            return run_video(job, net, _force_software=True)
+            return run_video(job, net, _force_software=True,
+                             _cache_bypass=bool(cache and cache.bypass))
         raise RuntimeError((detail[-1200:] or str(exc)) + "\nCheck that this FFmpeg build includes libx264.") from exc
     finally:
-        capture.release()
-        if proc.poll() is None:
-            stop_process(proc)
-        reader.join(timeout=2)
+        active_error = sys.exc_info()[1]
+        cleanup_error = None
+        try:
+            capture.release()
+        except BaseException as exc:
+            cleanup_error = exc
+        try:
+            stop_video_encoder(proc, reader)
+        except BaseException as exc:
+            cleanup_error = cleanup_error or exc
+        if cleanup_error is not None:
+            if active_error is None:
+                raise cleanup_error
+            active_error.video_cleanup_error = str(cleanup_error)
 
 
 def process_job(job_id: str) -> None:
@@ -820,7 +1114,7 @@ def process_job(job_id: str) -> None:
         target_owned = True
         with job.timings.measure("preflight"):
             report = inspect_media(job.input_path, job.media_type, job.layout,
-                                   job.resolution, OUTPUTS, FFMPEG_PATH)
+                                   job.resolution, OUTPUTS, FFMPEG_PATH, cancel_event=job.cancel_event)
             set_job(job.id, preflight=report)
         if job.purpose == 'preview_clip':
             source_fps = report.get('fps') if not report.get('fps_provisional') else None
@@ -839,7 +1133,8 @@ def process_job(job_id: str) -> None:
                                      on_process=lambda proc: set_job(job.id, process=proc))
             job.preview_source_path = proxy
             with job.timings.measure('preflight'):
-                report = inspect_media(proxy, 'video', job.layout, 'source', OUTPUTS, FFMPEG_PATH)
+                report = inspect_media(proxy, 'video', job.layout, 'source', OUTPUTS, FFMPEG_PATH,
+                                       cancel_event=job.cancel_event)
             # Validate the helper output before any inference, rather than trusting metadata alone.
             if (report['source_width'] > 960 or report['source_height'] > 540
                     or not report.get('total_frames') or report['total_frames'] > 120
@@ -872,7 +1167,7 @@ def process_job(job_id: str) -> None:
         set_job(job_id, state="completed", phase="complete", progress=100, output_path=target, process=None,
                 processing_finished_monotonic=time.monotonic(),
                 message="Processed clip ready" if job.purpose == 'preview_clip' else "Stereo export ready")
-    except (JobCancelled, ClipCancelled):
+    except (JobCancelled, ClipCancelled, DecoderCancelled):
         if target_owned:
             cleanup_job_file(job, target, 'partial output')
         save_history_boundary(job, 'finish', 'canceled')
@@ -881,7 +1176,11 @@ def process_job(job_id: str) -> None:
         if target_owned:
             cleanup_job_file(job, target, 'partial output')
         # Bound persisted error text independently from the live diagnostic.
-        error = re.sub(r'[\x00-\x1f\x7f]', ' ', str(exc))[:4096] or 'Conversion failed'
+        detail = str(exc)
+        cleanup_detail = getattr(exc, 'video_cleanup_error', None)
+        if cleanup_detail:
+            detail = f'{detail} (video cleanup also failed: {cleanup_detail})'
+        error = re.sub(r'[\x00-\x1f\x7f]', ' ', detail)[:4096] or 'Conversion failed'
         save_history_boundary(job, 'finish', 'failed', error=error)
         set_job(job_id, state="failed", phase="failed", process=None, processing_finished_monotonic=time.monotonic(), error=str(exc), message="Conversion failed")
     finally:
@@ -1091,6 +1390,7 @@ class RequestBodyLimitMiddleware:
 
 
 app.add_middleware(RequestBodyLimitMiddleware)
+app.add_middleware(UploadAdmissionMiddleware, paths=frozenset(REQUEST_BODY_LIMITS), max_inflight=4)
 
 
 def local_api_access(host: str, scheme: str, origin: str | None,
@@ -1190,8 +1490,29 @@ def get_storage() -> dict[str, Any]:
     with JOB_QUEUE.lock, JOBS_LOCK:
         roots, protected = workspace_roots(), protected_workspace_paths()
     report = storage_inventory(roots, protected)
-    report['scope'] = 'Managed uploads, preview segments, outputs and models. RAM preview cache is excluded; no persistent depth cache is installed.'
+    report['scope'] = 'Managed uploads, preview segments, outputs and models. RAM preview depth is excluded. Persistent video depth is measured separately below.'
     return report
+
+
+@app.get('/api/depth-cache')
+def get_depth_cache() -> dict[str, Any]:
+    try:
+        return get_video_depth_store().inventory()
+    except (CacheError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f'Depth cache could not be measured: {exc}') from exc
+
+
+@app.post('/api/depth-cache/cleanup')
+def cleanup_depth_cache(body: Any = Body(...)) -> dict[str, Any]:
+    if (type(body) is not dict or set(body) != {'keys'} or type(body['keys']) is not list
+            or len(body['keys']) > 1000 or any(type(key) is not str or
+            re.fullmatch(r'[0-9a-f]{64}', key) is None for key in body['keys'])
+            or len(set(body['keys'])) != len(body['keys'])):
+        raise HTTPException(status_code=400, detail='Select up to 1000 distinct depth cache entries.')
+    try:
+        return get_video_depth_store().delete(body['keys'])
+    except (CacheError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f'Depth cache cleanup failed: {exc}') from exc
 
 
 @app.post('/api/storage/cleanup')
@@ -1525,6 +1846,23 @@ async def upload_model(model: UploadFile = File(...)) -> dict[str, Any]:
     return {"ok": True, "model_available": True, "model_name": Path(model.filename or "depth.onnx").name, "bytes": total}
 
 
+def reserve_job_upload(input_path: Path) -> None:
+    """Reserve capacity before copying media, including simultaneous admissions."""
+    with JOB_QUEUE.lock, JOBS_LOCK:
+        if not ACCEPTING_MUTATIONS:
+            raise HTTPException(status_code=503, detail='StereoLab is shutting down.')
+        if len(JOBS) + len(STAGED_UPLOADS) >= MAX_SESSION_JOBS:
+            raise HTTPException(status_code=429, detail=(
+                'This session has reached its job limit. Finish active work, then restart StereoLab. '
+                'Saved outputs and durable history remain on disk.'))
+        if (len(STAGED_UPLOADS) >= MAX_STAGED_UPLOADS
+                or JOB_QUEUE.qsize() + len(STAGED_UPLOADS) >= MAX_PENDING_JOBS):
+            raise HTTPException(status_code=429, detail=(
+                'The local queue or upload slots are full. Let queued work finish, '
+                'or remove pending jobs, then retry.'))
+        STAGED_UPLOADS.add(input_path)
+
+
 @app.post("/api/jobs")
 async def create_job(
     file: UploadFile = File(...),
@@ -1546,6 +1884,7 @@ async def create_job(
     expected_source_sha256: str | None = Form(None), request: Request = None,
     depth_interval: Annotated[int, Form()] = 1,
     video_decode: Annotated[str, Form()] = 'software',
+    use_depth_cache: Annotated[bool, Form()] = False,
 ) -> dict[str, Any]:
     filename = Path((file.filename or "input").replace("\\", "/")).name
     if type(depth_interval) is not int or depth_interval not in {1, 2}:
@@ -1614,8 +1953,11 @@ async def create_job(
 
     job_id = str(uuid.uuid4())
     input_path = UPLOADS / f"{job_id}{extension}"
-    with JOBS_LOCK:
-        STAGED_UPLOADS.add(input_path)
+    try:
+        reserve_job_upload(input_path)
+    except HTTPException:
+        await file.close()
+        raise
     try:
         total = 0
         digest = hashlib.sha256()
@@ -1662,6 +2004,7 @@ async def create_job(
             execution_mode=execution_mode,
             depth_interval=depth_interval,
             video_decode=video_decode,
+            use_depth_cache=use_depth_cache,
             purpose=purpose,
             clip_start_seconds=clip_start_seconds,
             clip_duration_seconds=clip_duration_seconds,
@@ -1679,7 +2022,7 @@ async def create_job(
                                        build_fingerprint=APP_BUILD_FINGERPRINT))
                     job.history_admitted = True
                 JOBS[job_id] = job
-                JOB_QUEUE.put(job_id)
+                JOB_QUEUE.put_nowait(job_id)
         except HistoryCapacityError as exc:
             input_path.unlink(missing_ok=True)
             raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -1875,6 +2218,5 @@ def preview_clip_video(job_id: str) -> FileResponse:
 
 
 if __name__ == "__main__":
-    print("StereoLab is running at http://127.0.0.1:8765")
-    print("All processing stays on this computer. Press Ctrl+C to stop.")
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    from app_launcher import run_app
+    run_app(app)
