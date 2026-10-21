@@ -36,6 +36,18 @@ The frozen app stores uploads and outputs under the same StereoLab local-data fo
 One-file extraction can make the first launch slower, and Windows may show a warning
 for an unsigned PyInstaller executable.
 
+Prebuilt Windows beta downloads are published on the [GitHub Releases page](https://github.com/Boss720/3d/releases).
+
+## Screenshots
+
+The screenshots use a generated sample illustration. The processed preview shows
+StereoLab's visual-approximation mode, which uses image cues and is not a neural
+depth model.
+
+![StereoLab studio with the source viewer, model and stereo controls, and export queue](static/screenshots/stereolab-studio.png)
+
+![StereoLab side-by-side stereo preview of the sample illustration](static/screenshots/stereolab-stereo-preview.png)
+
 ## NVIDIA GTX GPU and CPU cooperation
 
 For Windows GPU acceleration, run `.\setup-gpu.ps1` once, then restart with `.\run.ps1`.
