@@ -2,7 +2,25 @@ buymeacoffee.com/bosscube194
 
 # StereoLab
 
-A local Windows workspace for converting photos and videos into stereoscopic 3D. This version adds downloadable neural depth models, real processed-frame previews, depth presets, temporal smoothing, and depth/RGB-D exports to the original clean-room prototype.
+StereoLab is a Windows app that turns photos and videos into 3D side-by-side (SBS) files. It estimates which parts of a picture are near or far, then shifts the image slightly to make separate views for your left and right eyes. Results are an approximate 3D effect; inspect the preview before exporting.
+
+**Beta download:** Windows downloads on the [GitHub Releases page](https://github.com/Boss720/3d/releases) are beta software. The existing `v0.1.0` download was published before this repository added its MIT license notice. A newer private build exists but has not been published. Do not assume a new licensed release is available yet.
+
+## Quick start (from source)
+
+You need Windows and Python 3.10 or newer. In PowerShell, open this project folder and run:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\run.ps1
+```
+
+Then open [http://127.0.0.1:8765](http://127.0.0.1:8765) in your browser. The first neural depth model is downloaded only after you choose **Install** in the app. For a quick try without downloading a model, choose **Visual approximation**. Video conversion also needs FFmpeg; the app checks for it on `PATH`, in `VIDEO3D_FFMPEG`, or in its local helper location.
+
+## XREAL and side-by-side 3D, in plain English
+
+SBS means one wide video frame contains two views next to each other: the left-eye view on the left and the right-eye view on the right. An XREAL glasses display can show those views to the matching eyes to create a 3D impression. Pick the XREAL side-by-side layout when exporting for that viewing setup. Screen shape, player settings, and glasses model can affect playback; physical XREAL 1S playback has not been verified for this release.
 
 ## License
 
@@ -15,51 +33,20 @@ depth models are marked non-commercial, and the rights for one published ONNX
 conversion remain unclear. Review [RELEASE_DEPENDENCIES.md](RELEASE_DEPENDENCIES.md)
 before redistributing model files or a packaged executable.
 
-## Run
-
-Python 3.10+ is required. From this folder:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\run.ps1
-```
-
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The launcher prefers this project's `.venv-gpu` when installed, then `.venv`. If an older server is already using that port, stop that server or use another port:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8766
-```
-
 ## Windows executable
 
-Build the standalone, 64-bit Windows executable with the DirectML runtime:
+Packaged users can download the beta from the [GitHub Releases page](https://github.com/Boss720/3d/releases); no installer is currently published. The executable runs the local web app; open [http://127.0.0.1:8765](http://127.0.0.1:8765). Depth models download only after an explicit Install action and are stored under `%LOCALAPPDATA%\StereoLab`; they are not bundled into the executable. The frozen app stores uploads and outputs in that same local-data folder. First launch can take longer while the one-file app unpacks, and Windows may show a warning because the executable is unsigned.
+
+To build from source, developers can run:
 
 ```powershell
 .\setup-gpu.ps1
 .\build-exe.ps1
+.\build-installer.ps1
 .\dist\StereoLab.exe
 ```
 
-The executable runs the local web app; open [http://127.0.0.1:8765](http://127.0.0.1:8765).
-Depth models download on demand and are stored under `%LOCALAPPDATA%\StereoLab`;
-they are not bundled into the executable. Video conversion also needs FFmpeg. The
-app detects FFmpeg on `PATH`, `VIDEO3D_FFMPEG`, or an already installed local helper.
-The frozen app stores uploads and outputs under the same StereoLab local-data folder.
-One-file extraction can make the first launch slower, and Windows may show a warning
-for an unsigned PyInstaller executable.
-The `setup-gpu.ps1` and `build-exe.ps1` commands above are for developers building
-from source; packaged users do not run them. First neural-model installation needs
-internet access and an explicit Install action. A model becomes ready after
-its pinned size/SHA-256 and inference checks pass. Clean-Windows first-run behavior
-is still under release review; see `RELEASE_READINESS.md`.
-
-Prebuilt Windows beta downloads are published on the [GitHub Releases page](https://github.com/Boss720/3d/releases).
-The existing `v0.1.0` binary predates the MIT license file and does not carry
-that notice. New packaged builds include the license in the executable and as
-a companion file; the next release still requires the dependency and model
-review below.
-
+Building the installer also requires Inno Setup 6. The setup/build commands are for developers; packaged users do not run them. Clean-Windows first-run behavior is still under release review; see [RELEASE_READINESS.md](RELEASE_READINESS.md). The existing `v0.1.0` binary predates the MIT license notice. A future packaged build includes the license inside the executable and as a companion file, but still needs the dependency and model review described above.
 ## Screenshots
 
 The screenshots use a generated sample illustration. The processed preview shows

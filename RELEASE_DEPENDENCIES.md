@@ -90,6 +90,15 @@ Embedded build manifest fingerprint: `8e56afce8aa2240e94a07f27bc093186939dd3ed03
 The archive notice-name scan found named license files only for the listed owners. FastAPI, Starlette, Uvicorn, python-multipart, ONNX Runtime, OpenCV, pydantic_core, and setuptools have no corresponding named license/notice files in the archive scan. Native archive components also include Python, OpenSSL, libffi, SQLite, DirectML, and Microsoft runtime DLLs without separately named notices found by this scan. These results require upstream notice and provenance review; they do not determine compliance.
 The installed runtime closure lists `flatbuffers`, `mpmath`, and `sympy`, which are absent from the inspected PYZ; the archive instead contains setuptools and vendored jaraco, more_itertools, tomli, wheel, and backports modules. Treat the installed closure and frozen archive as separate inventories.
 
+## Installer compiler
+
+The private `v0.2.0-beta.1` setup candidate was compiled with Inno Setup 6.7.3.
+The vendor asks commercial users to purchase a license and states that using
+the compiler through a build script counts as use. Confirm whether the planned
+build/distribution context is commercial and obtain the required license if
+so; this installer smoke test does not establish compiler entitlement. See the
+[vendor purchase guidance](https://jrsoftware.org/ishelp/topic_purchase.htm).
+
 ## Candidate-specific notice source review
 
 The current 98,572,977-byte candidate has SHA-256 `6776ba55a960d817c6e26f3a125dbc49f399f967435633c4e310fd1663943b45`. Relative to the prior candidate, the CArchive adds only the root `LICENSE`; its sole changed entry is `base_library.zip`, whose 155 members have identical names and content. All 97 native DLL/PYD entries and 22 third-party notice entries match by name and bytes. The earlier independent installed-source checks therefore carry over to those exact entries. The notices cover Click 8.5.0, NumPy 2.5.4, ONNX 1.23.2, OpenTelemetry API 1.45.1, and Pydantic 2.14.1.

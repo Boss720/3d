@@ -1,10 +1,9 @@
 # StereoLab handoff — 21 October 2026
 
-**Release is not ready.** This checkpoint preserves the current source and
-private-candidate evidence. The owner directed broad public reuse; original
+The owner has requested a new release and directed broad public reuse; original
 StereoLab source and documentation are now under MIT in the root `LICENSE`.
-That grant does not cover third-party dependencies or model weights and does
-not approve publication of a new executable, version, or release.
+Public binary publication still waits on third-party dependency notices and
+redistribution rights, model terms, and remaining release-readiness checks.
 
 The existing public v0.1.0 binary predates the root MIT license and does not
 carry that notice. `StereoLab.spec` now embeds `LICENSE`; `build-exe.ps1` also
@@ -39,10 +38,12 @@ results. The former long handoff is retained locally at
 
 | Identity | Value |
 | --- | --- |
-| EXE | `.runtime/mit-license-packaging-20261021-01/dist/StereoLab.exe` |
+| EXE | `dist/StereoLab-0.2.0-beta.1.exe` |
 | Size | 98,572,977 bytes |
 | SHA-256 | `6776ba55a960d817c6e26f3a125dbc49f399f967435633c4e310fd1663943b45` |
 | Embedded source fingerprint | `8e56afce8aa2240e94a07f27bc093186939dd3ed0302c72976a51baa76d9e2fe` |
+
+The companion release-candidate files are in `.runtime/stereolab-release-candidate-0.2.0-beta.1/` with checksums in `SHA256SUMS.txt`. The locally built Inno Setup candidate is `.runtime/stereolab-installer/StereoLab-0.2.0-beta.1-Setup.exe` (99,775,508 bytes; SHA-256 `87f6a135b1e5c57f15dbf2fdf33b1b4873372604bcc86c19ac0f8c14a443e260`). It installs per-user, copies the EXE and MIT license, creates Start Menu launch/browser/uninstall shortcuts, and leaves app data in `%LOCALAPPDATA%\StereoLab`. Its isolated install/launch/uninstall evidence is retained under `.runtime/stereolab-installer/acceptance/report.json`; the installed app returned HTTP 200 and its exact EXE and license hashes matched the candidate. This installer is a private candidate only, not an approved public artifact. The old unversioned `dist/StereoLab.exe` remains intact because two processes were running from it; the new hash-verified EXE is the versioned sibling above.
 
 The runtime fingerprint covers the 26 Python files declared in
 `build_identity.py`. All nine packaged static assets separately matched source.
@@ -142,7 +143,8 @@ Python 3.12 results do not transfer to it.
 5. Play the generated sample through physical XREAL 1S glasses when available.
    File geometry alone does not establish stereo, aspect ratio or audio playback.
 6. Freeze approved source/build inputs, rebuild, verify that exact artifact,
-   record its checksum/version/notes, and obtain final release authorization.
+   record its checksum/version/notes, then publish once the remaining
+   redistribution and release-readiness gates are closed.
 
 Generated-only scope leaves natural-scene depth quality and real-footage AV sync
 unverified. Do not replace a running user EXE or control unrelated app instances.
