@@ -84,6 +84,7 @@ print(json.dumps(report, sort_keys=True))
 PY
 "$BUILD_PYTHON" -m pip freeze --all > "$PACKAGE/requirements-resolved.txt"
 "$BUILD_PYTHON" scripts/verify_linux_elf.py "$PACKAGE" --report "$PACKAGE/native-dependencies.json"
+"$BUILD_PYTHON" scripts/collect_linux_notices.py --output "$PACKAGE/third-party-notices"
 
 mkdir -p "$RELEASE"
 ARCHIVE="$RELEASE/StereoLab-$VERSION-linux-x86_64-cpu.tar.gz"
