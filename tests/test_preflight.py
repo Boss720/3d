@@ -84,6 +84,26 @@ class PreflightTests(unittest.TestCase):
         report = self.video(self.capture(width=646, height=482), 'HALFTB')
         self.assertEqual((report['output_width'], report['output_height']), (646, 480))
 
+    def test_sdr_color_contract_reports_range_and_normalizes_full_range(self):
+        capture = self.capture()
+        capture.probe = {'color_range': 'pc', 'color_space': 'bt709', 'color_transfer': 'bt709',
+                         'color_primaries': 'bt709', 'sample_aspect_ratio': '1:1'}
+        report = self.video(capture)
+        self.assertTrue(any('8-bit BGR' in warning and 'limited-range YUV420' in warning
+                            for warning in report['warnings']))
+        self.assertTrue(any('Full-range input is normalized' in warning for warning in report['warnings']))
+
+    def test_hdr_and_anamorphic_video_fail_with_preflight_guidance(self):
+        for probe, message in [
+            ({'color_transfer': 'smpte2084'}, 'HDR video is not supported'),
+            ({'sample_aspect_ratio': '4:3'}, 'Anamorphic video with non-square pixels is not supported'),
+        ]:
+            capture = self.capture()
+            capture.probe = probe
+            with self.subTest(probe=probe), self.assertRaisesRegex(RuntimeError, message):
+                self.video(capture)
+            capture.release.assert_called_once()
+
     def test_corrupt_source_fails_with_recovery_before_encoder_work(self):
         with patch('preflight.cv2.imread', return_value=None):
             with self.assertRaisesRegex(RuntimeError, 'JPG|PNG|re-encode'):

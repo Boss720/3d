@@ -33,11 +33,11 @@ def measure_inputs(predict, identity: dict, budget_seconds: float = 15,
                          'execution': None, 'error': None} for size in sizes}
     attempts = 0
     provider_identity = None
-    for round_index in range(3):
-        for size in sizes:
-            candidate = candidates[size]
-            if candidate['error'] or len(candidate['samples_seconds']) >= 2:
-                continue
+    # Keep all calls for a shape together: DepthEngine owns one dimension-keyed
+    # session, so changing sizes between calls makes every call a new warmup.
+    for size in sizes:
+        candidate = candidates[size]
+        while not candidate['error'] and len(candidate['samples_seconds']) < 2:
             if clock() - started >= budget_seconds:
                 break
             before = clock()

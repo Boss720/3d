@@ -65,17 +65,17 @@ const response = data => ({ok: true, json: async () => data});
 function fixture(storage = new Map()) {
   const html = fs.readFileSync(path.join(__dirname, '../static/index.html'), 'utf8');
   const actualIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
-  const nodes = new Map(), timers = new Map(), calls = [], blobs = [];
+  const nodes = new Map(), timers = new Map(), calls = [], blobs = [], windowListeners = new Map(), documentListeners = new Map();
   let nextTimer = 0, nextUuid = 0, fetchHandler = async url => response(url === '/api/models' ? {models: []} : {});
   const document = {
     activeElement: null,
     getElementById(id) { if (!actualIds.has(id)) return null; if (!nodes.has(id)) { const node = new Element(); node.ownerDocument = this; nodes.set(id, node); } return nodes.get(id); },
     createElement(tagName) { const node = new Element(tagName); node.ownerDocument = this; return node; }, createTextNode(text) { return {textContent: text}; },
-    querySelectorAll() { return []; }, querySelector() { return null; }, addEventListener() {},
+    querySelectorAll() { return []; }, querySelector() { return null; }, addEventListener(name, fn) { (documentListeners.get(name) ?? documentListeners.set(name, []).get(name)).push(fn); },
   };
   document.activeElement = new Element('body'); document.activeElement.ownerDocument = document;
   const context = vm.createContext({
-    document, window: {addEventListener() {}, localStorage: {getItem(key) { return storage.get(key) ?? null; }, setItem(key, value) { storage.set(key, value); }}}, console,
+    document, window: {addEventListener(name, fn) { (windowListeners.get(name) ?? windowListeners.set(name, []).get(name)).push(fn); }, localStorage: {getItem(key) { return storage.get(key) ?? null; }, setItem(key, value) { storage.set(key, value); }}}, console,
     sessionStorage: {getItem() { return null; }, setItem() {}},
     URL: {createObjectURL(blob) { blobs.push(blob); return `blob:test-${blobs.length}`; }, revokeObjectURL() {}},
     Blob, TextEncoder,
@@ -118,7 +118,7 @@ function fixture(storage = new Map()) {
   app.ui.queueEmpty.querySelector('strong').textContent = 'A little empty, for now.';
   app.ui.queueEmpty.querySelector('small').textContent = 'Add media above. Completed exports are ready to download here.';
   return {
-    app, timers, calls, document, storage, blobs,
+    app, timers, calls, document, storage, blobs, windowListeners, documentListeners,
     network(fn) { fetchHandler = fn; },
     async fire(id) { const timer = timers.get(id); assert.ok(timer, 'Expected scheduled retry'); timers.delete(id); await timer.fn(); },
     async flushImmediate() { for (const [id, timer] of [...timers]) if (timer.delay === 0) { timers.delete(id); await timer.fn(); } },
@@ -179,7 +179,7 @@ async function run(scenario) {
     assert.equal(f.jobTimer()[1].delay, 1500, 'Recovery resumes ordinary active polling');
     await f.fire(f.jobTimer()[0]);
     assert.equal(app.state().items[0].state, 'completed');
-    assert.equal(f.jobTimer(), undefined, 'Terminal jobs stop ordinary polling');
+    assert.equal(f.jobTimer()[1].delay, 15000, 'Idle queue keeps a low-frequency refresh scheduled');
     assert.equal(app.ui.queueEmpty.querySelector('strong').textContent, 'A little empty, for now.');
   } else if (scenario === 'restore-backoff') {
     const pending = deferred();
@@ -209,7 +209,18 @@ async function run(scenario) {
     assert.equal(app.ui.queueEmpty.hidden, false);
     assert.equal(app.ui.queueEmpty.querySelector('strong').textContent, 'A little empty, for now.');
     assert.match(app.ui.queueEmpty.querySelector('small').textContent, /Add media above/);
-    assert.equal(f.jobTimer(), undefined, 'A successful empty refresh cancels retries');
+    assert.equal(f.jobTimer()[1].delay, 15000, 'A successful empty refresh switches to low-frequency idle polling');
+  } else if (scenario === 'queue-return') {
+    let count = 0;
+    f.network(async url => { if (url === '/api/jobs') count++; return response(url === '/api/jobs' ? [] : {}); });
+    await app.pollJobs();
+    assert.equal(count, 1);
+    f.windowListeners.get('focus')[0]();
+    await tick();
+    assert.equal(count, 2, 'Returning focus refreshes the queue immediately');
+    f.documentListeners.get('visibilitychange')[0]();
+    await tick();
+    assert.equal(count, 3, 'Returning to a visible tab refreshes the queue immediately');
   } else if (scenario === 'cleanup-warning') {
     for (const state of ['completed', 'failed', 'canceled']) {
       f.network(async () => response([{...job(state), cleanup_warning: 'Temporary upload could not be removed.'}]));

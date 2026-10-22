@@ -1060,11 +1060,9 @@ if (typeof document !== "undefined") (() => {
       const identity=String(item.uid||item.jobId),row=el("article",`queue-row${item.uid===selectedUid?" selected":""}`);row.dataset.itemUid=identity;
        const icon=el("div","file-icon",item.mediaType==="image"?"▧":"▶"),copy=el("div","file-copy"),name=el("button","file-name",item.name);name.type="button";name.disabled=projectBusy;name.dataset.actionKey=`select-${identity}`;name.title=item.name;name.setAttribute("aria-label",`Select ${item.name}`);name.setAttribute("aria-pressed",String(item.uid===selectedUid));name.addEventListener("click",()=>selectItem(item));
       const meta=el("div","file-meta"),state=el("span",`file-status ${item.state}`,item.message||({ready:"Ready to convert",uploading:"Uploading locally",completed:"Complete",failed:"Failed",canceled:"Canceled"}[item.state]||item.state));meta.append(state);
-      if(item.depthCache){const cacheLabel=frontendContract.depthCacheStatusLabel(item.depthCache,formatBytes);if(cacheLabel)meta.append(el("span","",cacheLabel));}
       const cache=item.depthCache; if(cache){const cacheLabel=frontendContract.depthCacheStatusLabel(cache,formatBytes);if(cacheLabel)meta.append(el("span","",cacheLabel));}
       const info=[formatBytes(item.file?.size||item.size),item.layout].filter(Boolean).join(" · ");if(info)meta.append(el("span","",info));copy.append(name,meta);
       const execution=frontendContract.executionSummary(item.execution,item.pipeline);if(execution)copy.append(el("div","queue-execution",execution));else if(item.executionMode)copy.append(el("div","queue-execution",`Requested: ${{auto:"Auto",hybrid:"GPU + CPU",gpu:"NVIDIA GPU",cpu:"CPU only"}[item.executionMode]||item.executionMode} · awaiting execution`));
-      if(item.depthCache?.warning)copy.append(el("small","queue-source-detail",`Depth cache warning: ${item.depthCache.warning.slice(0,240)}`));
       if(item.depthCacheError)copy.append(el("small","queue-source-detail",item.depthCacheError));
       if(item.depthCache?.warning)copy.append(el("small","queue-source-detail",`Depth cache warning: ${item.depthCache.warning.slice(0,240)}`));
       const runtimeDetails=progressDetails(item);if(runtimeDetails.length)copy.append(el("div","queue-runtime",runtimeDetails.join(" · ")));
@@ -1544,7 +1542,7 @@ if (typeof document !== "undefined") (() => {
     updateCompletionNotificationControls();if(jobsBusy)return;jobsBusy=true;clearTimeout(jobTimer);jobTimer=null;
     try{await refreshQueueFromServer();jobsRetryDelay=0;ui.queueEmpty.querySelector("strong").textContent="A little empty, for now.";ui.queueEmpty.querySelector("small").textContent="Add media above. Completed exports are ready to download here.";}
     catch(error){jobsRetryDelay=Math.min(30000,jobsRetryDelay?jobsRetryDelay*2:1500);ui.queueEmpty.hidden=items.length>0;if(!items.length){ui.queueEmpty.querySelector("strong").textContent="Could not restore the local queue";ui.queueEmpty.querySelector("small").textContent=`${error.message} Retrying automatically; Refresh status can retry now.`;}else toast(`Queue refresh failed: ${error.message}`,true);}
-    finally{jobsBusy=false;const delay=jobsRetryDelay||(items.some((x)=>["queued","processing"].includes(x.state))?1500:0);if(delay)jobTimer=setTimeout(pollJobs,delay);}
+    finally{jobsBusy=false;const delay=jobsRetryDelay||(items.some((x)=>["queued","processing"].includes(x.state))?1500:15000);if(delay)jobTimer=setTimeout(pollJobs,delay);}
   }
   async function cancelJob(item){try{await request(`/api/jobs/${encodeURIComponent(item.jobId)}/cancel`,{method:"POST"});item.message="Cancellation requested";updateQueue();await pollJobs();}catch(error){toast(error.message,true);}}
   ui.browseButton.addEventListener("click",(event)=>{event.stopPropagation();ui.mediaInput.click();});ui.dropZone.addEventListener("click",(event)=>{if(event.target!==ui.browseButton)ui.mediaInput.click();});
@@ -1565,7 +1563,8 @@ ui.mediaInput.addEventListener("change",()=>addFiles(ui.mediaInput.files));
   ui.convertButton.addEventListener("click",convertPending);ui.modelButton.addEventListener("click",()=>ui.modelInput.click());ui.modelInput.addEventListener("change",()=>uploadModel(ui.modelInput.files[0]));ui.installSelected.addEventListener("click",()=>installModel(ui.depthMode.value));ui.refreshModels.addEventListener("click",()=>{loadModels();loadStatus();pollJobs();});
   ui.completionNotifications.addEventListener("click",toggleCompletionNotifications);
   window.addEventListener("keydown",(event)=>{const action=frontendContract.keyboardShortcutAction({altKey:event.altKey,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,repeat:event.repeat,defaultPrevented:event.defaultPrevented,isComposing:event.isComposing,code:event.code,target:event.target,modalOpen:Boolean(document.querySelector("dialog[open]")),previewEnabled:!ui.generatePreview.disabled,submitEnabled:!ui.convertButton.disabled});if(!action)return;event.preventDefault();(action==="preview"?ui.generatePreview:ui.convertButton).click();});
-  window.addEventListener("focus",updateCompletionNotificationControls);document.addEventListener("visibilitychange",()=>{if(!document.hidden)updateCompletionNotificationControls();});
+  function refreshQueueOnReturn(){updateCompletionNotificationControls();if(document.hidden)return;clearTimeout(jobTimer);jobTimer=null;void pollJobs();}
+  window.addEventListener("focus",refreshQueueOnReturn);document.addEventListener("visibilitychange",()=>{if(!document.hidden)refreshQueueOnReturn();});
   ui.applySettingsToReady.addEventListener("click",applySettingsToReady);
   ui.historyRefresh.addEventListener("click",()=>loadStatus(true));ui.historyMore.addEventListener("click",()=>loadHistory(true));
   ui.outputNameTemplate.addEventListener("input",()=>{currentOutputNameTemplate=ui.outputNameTemplate.value;try{frontendContract.validateOutputNameTemplate(currentOutputNameTemplate,namingCapability?.max_template_length??120);ui.outputNameTemplate.removeAttribute("aria-invalid");}catch(error){ui.outputNameTemplate.setAttribute("aria-invalid","true");ui.outputNamingStatus.textContent=error.message;}updateQueue();});

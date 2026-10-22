@@ -111,6 +111,8 @@
     $('filmstripStatus').textContent = ''; syncTransport(); metadata();
   }
   function compactQueue() {
+    const liveUids = new Set([...$('queueRows').querySelectorAll('.queue-row')].map(row => row.dataset.itemUid));
+    for (const uid of thumbnailByUid.keys()) if (!liveUids.has(uid)) thumbnailByUid.delete(uid);
     for (const row of $('queueRows').children) {
       const knownThumb = thumbnailByUid.get(row.dataset.itemUid), knownIcon = row.querySelector('.file-icon');
       if (knownThumb && knownIcon && !knownIcon.querySelector('img')) { const img=document.createElement('img');img.src=knownThumb;img.alt='';knownIcon.replaceChildren(img); }
@@ -152,8 +154,8 @@
   $('studioMute').addEventListener('click', () => {video.muted=!video.muted;syncTransport();});
   $('studioRate').addEventListener('change', () => {video.playbackRate=Number($('studioRate').value);});
   $('studioFullscreen').addEventListener('click', async () => {try {if(document.fullscreenElement)await document.exitFullscreen();else await $('previewStage').requestFullscreen();} catch { $('filmstripStatus').textContent='Fullscreen is unavailable in this browser.'; }});
-  $('framePrevious').addEventListener('click',()=>seek([...activeTimes].reverse().find(time=>time<video.currentTime-.1)??0));
-  $('frameNext').addEventListener('click',()=>seek(activeTimes.find(time=>time>video.currentTime+.1)??video.duration));
+  $('framePrevious').addEventListener('click',()=>seek([...activeTimes].reverse().find(time=>time<video.currentTime-.1)??activeTimes[0]??0));
+  $('frameNext').addEventListener('click',()=>seek(activeTimes.find(time=>time>video.currentTime+.1)??activeTimes.at(-1)??video.duration));
   for (const event of ['timeupdate','play','pause','ended','volumechange','ratechange','durationchange','emptied']) video.addEventListener(event,syncTransport);
   video.addEventListener('loadeddata',()=>{metadata();syncTransport();void buildVideoStrip();});
   image.addEventListener('load',()=>{

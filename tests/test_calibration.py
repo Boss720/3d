@@ -4,6 +4,28 @@ from calibration import fingerprint, measure_inputs
 
 
 class CalibrationTests(unittest.TestCase):
+    def test_dimension_keyed_session_gets_warmup_and_samples_before_switching(self):
+        now = [0.0]
+        active_size = [None]
+        calls = []
+
+        def predict(size):
+            reused = active_size[0] == size
+            active_size[0] = size
+            calls.append((size, reused))
+            now[0] += .1
+            return {'inference_succeeded': True, 'session_reused': reused, 'active_provider': 'CPU',
+                    'device_id': None, 'device': 'CPU', 'input_width': size, 'input_height': size}
+
+        result = measure_inputs(predict, {'model': 'dimension-keyed-fixture'}, clock=lambda: now[0])
+
+        self.assertTrue(result['sufficient_evidence'])
+        self.assertEqual(calls, [(size, reused) for size in (256, 384, 518)
+                                 for reused in (False, True, True)])
+        for candidate in result['candidates']:
+            self.assertEqual(len(candidate['warmup_seconds']), 1)
+            self.assertEqual(len(candidate['samples_seconds']), 2)
+
     def test_measured_fastest_requires_repeated_comparable_candidates(self):
         now = [0.0]
         first = [True]

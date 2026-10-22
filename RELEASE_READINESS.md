@@ -1,6 +1,16 @@
 # Production release readiness
 
-## Current beta.2 review — 21 October 2026
+## Current beta.3 review — 22 October 2026
+
+The owner requested beta.3 after the calibration, media preflight and queue/UI findings were fixed. GitHub's latest published beta was `v0.2.0-beta.2` at review time. Beta publication does not establish production readiness.
+
+The complete CPU suite passed 633 tests (7 skips); the DirectML environment passed 633 tests (3 skips). Both used `ResourceWarning` as an error. The beta.3 packaged EXE passed actual named Small DirectML inference, generated XREAL SBS video at 3840x1080 with audio, and cache/restart/history/save-copy checks. A separately installed copy passed the same packaged verifier; EXE/license hashes matched, and silent uninstall removed the installation directory. Packaged browser automation was not run for this candidate.
+
+Candidate artifacts and evidence are in `.runtime/release-beta3/`: `acceptance-retry-01/report.json`, `installer-acceptance/report.json`, `cpu-tests.log`, and `gpu-tests.log`. The embedded source fingerprint is `99756b0a2e1542c12713e15d445ba58ec0811c71752b67540105f693ecf7c892`. The standalone candidate SHA-256 is `f4e843c64f24fbea6784d1579b57e273c7de5ee81a10caaf049abfff8e1628b1`; the setup installer SHA-256 is `7a73476e6be22e41961c72b5df5f110b9296724803e8ae59a2b465726cbf12b4`. `SHA256SUMS.txt` accompanies the release assets.
+
+The pre-existing third-party dependency review, clean-machine, physical XREAL 1S, screen-reader, and packaged browser evidence gaps remain open. This beta does not claim those checks passed.
+
+## Historical beta.2 review — 21 October 2026
 
 The owner authorized a new beta release after review and fixes. Live GitHub inspection confirms beta.1 is already public; older statements below about beta.1 remaining private are historical. Beta publication does not establish production readiness.
 

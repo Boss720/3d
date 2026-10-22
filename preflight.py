@@ -85,6 +85,17 @@ def open_preflight_capture(source, ffmpeg, cancel_event=None):
     return open_video_capture(source, ffmpeg, cancel_event=cancel_event, prefer_hardware=False)
 
 
+def _sample_aspect_ratio(value: object) -> float | None:
+    if not isinstance(value, str) or ':' not in value:
+        return None
+    try:
+        numerator, denominator = (float(part) for part in value.split(':', 1))
+        ratio = numerator / denominator
+        return ratio if math.isfinite(ratio) and numerator > 0 and denominator > 0 else None
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+
+
 def _read_video(source: Path, warnings: list[str], ffmpeg: str,
                 cancel_event=None) -> tuple[int, int, int | None, float, bool]:
     capture = None
@@ -96,6 +107,21 @@ def _read_video(source: Path, warnings: list[str], ffmpeg: str,
         probe = getattr(capture, 'probe', None)
         if isinstance(probe, dict):
             fps_provisional = bool(probe.get('fps_provisional', fps_provisional))
+            transfer = str(probe.get('color_transfer') or '').lower()
+            if transfer in {'smpte2084', 'arib-std-b67'}:
+                raise RuntimeError('HDR video is not supported yet. Convert it to SDR BT.709 H.264 MP4, then retry.')
+            sar = _sample_aspect_ratio(probe.get('sample_aspect_ratio'))
+            if sar is not None and not math.isclose(sar, 1.0, rel_tol=0, abs_tol=1e-6):
+                raise RuntimeError('Anamorphic video with non-square pixels is not supported yet. Convert it to square-pixel SDR video, then retry.')
+            range_name = str(probe.get('color_range') or 'unspecified').lower()
+            matrix = str(probe.get('color_space') or 'unspecified')
+            transfer_name = str(probe.get('color_transfer') or 'unspecified')
+            primaries = str(probe.get('color_primaries') or 'unspecified')
+            warnings.append(f'SDR color path: range {range_name}, matrix {matrix}, transfer {transfer_name}, primaries {primaries}; FFmpeg decodes to 8-bit BGR and export is limited-range YUV420.')
+            if range_name in {'pc', 'jpeg'}:
+                warnings.append('Full-range input is normalized during FFmpeg decoding before limited-range YUV420 export.')
+            elif range_name not in {'tv', 'mpeg'}:
+                warnings.append('Source color range is unspecified; FFmpeg decoder defaults determine the 8-bit conversion.')
         ok, frame = capture.read()
         if not ok or frame is None:
             raise RuntimeError('The first video frame could not be decoded. Re-encode it as H.264 MP4 and retry.')

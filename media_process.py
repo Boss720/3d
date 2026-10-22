@@ -138,7 +138,7 @@ def probe_video(source, ffmpeg, cancel_event=None, timeout=30):
     if not ffprobe.is_file():
         raise MediaCommandError('FFprobe is required beside FFmpeg for safe video decoding. Install a complete FFmpeg build.')
     result = run_media_command([str(ffprobe), '-v', 'error', '-select_streams', 'v:0',
-        '-show_entries', 'stream=width,height,avg_frame_rate,r_frame_rate,duration,start_time,nb_frames:stream_tags=rotate:stream_side_data=rotation:format=duration,start_time',
+        '-show_entries', 'stream=width,height,avg_frame_rate,r_frame_rate,duration,start_time,nb_frames,sample_aspect_ratio,color_range,color_space,color_transfer,color_primaries:stream_tags=rotate:stream_side_data=rotation:format=duration,start_time',
         '-of', 'json', str(source)], cancel_event=cancel_event, timeout=timeout, max_output_bytes=65536)
     if result.returncode:
         detail = result.stderr.decode('utf-8', errors='replace').strip()[-2000:]
@@ -170,6 +170,9 @@ def probe_video(source, ffmpeg, cancel_event=None, timeout=30):
                 'source_total_frames': stream.get('nb_frames'), 'duration_seconds': duration,
                 'format_duration_seconds': _number(fmt.get('duration'), positive=True),
                 'video_start_seconds': video_start, 'format_start_seconds': format_start or 0.,
-                'rotation_degrees': rotation}
+                'rotation_degrees': rotation,
+                'sample_aspect_ratio': stream.get('sample_aspect_ratio'),
+                'color_range': stream.get('color_range'), 'color_space': stream.get('color_space'),
+                'color_transfer': stream.get('color_transfer'), 'color_primaries': stream.get('color_primaries')}
     except (KeyError, IndexError, TypeError, ValueError, OverflowError) as exc:
         raise MediaCommandError('Video metadata or display geometry is unsupported. Re-encode as a standard H.264 MP4 (maximum 8192 pixels per dimension).') from exc

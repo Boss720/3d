@@ -35,6 +35,9 @@ class FrontendLifecycleTests(unittest.TestCase):
     def test_manual_status_refresh_restores_queue_and_empty_copy(self):
         self.run_lifecycle("manual-refresh")
 
+    def test_focus_and_visibility_return_refresh_idle_queue(self):
+        self.run_lifecycle("queue-return")
+
     def test_cleanup_warning_is_visible_without_changing_terminal_state(self):
         self.run_lifecycle("cleanup-warning")
 

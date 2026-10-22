@@ -12,7 +12,7 @@ These show the app using a generated illustration. The preview uses Visual appro
 
 ![StereoLab side-by-side stereo preview of the sample illustration](static/screenshots/stereolab-stereo-preview.png)
 
-**Download:** Get the Windows beta from the [GitHub Releases page](https://github.com/Boss720/3d/releases). The current version is `v0.2.0-beta.2`. See [release notes](RELEASE_NOTES.md) for the latest fixes. The older `v0.1.0` download predates the repository's MIT license notice.
+**Download:** Get the Windows beta from the [GitHub Releases page](https://github.com/Boss720/3d/releases). The current version is `v0.2.0-beta.3`. See [release notes](RELEASE_NOTES.md) for the latest fixes. The older `v0.1.0` download predates the repository's MIT license notice.
 
 ## Quick start (from source)
 

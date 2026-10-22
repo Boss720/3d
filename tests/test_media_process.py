@@ -75,6 +75,7 @@ class ProbeTests(unittest.TestCase):
             metadata = media.probe_video('source.mp4', 'ffmpeg', timeout=3)
         self.assertEqual(run.call_args.kwargs['timeout'], 3)
         command = run.call_args.args[0]
+        self.probe_command = command
         self.assertIn('-select_streams', command)
         self.assertNotIn('-show_streams', command)
         self.assertNotIn('-show_frames', command)
@@ -88,6 +89,20 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(metadata['video_start_seconds'], 2)
         self.assertEqual(metadata['format_start_seconds'], 1)
         self.assertFalse(metadata['fps_provisional'])
+
+    def test_probe_reports_pixel_aspect_and_color_characteristics(self):
+        metadata = self.probe({'width': 160, 'height': 90, 'avg_frame_rate': '24/1',
+                               'sample_aspect_ratio': '4:3', 'color_range': 'pc',
+                               'color_space': 'bt709', 'color_transfer': 'bt709',
+                               'color_primaries': 'bt709'})
+        self.assertEqual(metadata['sample_aspect_ratio'], '4:3')
+        self.assertEqual(metadata['color_range'], 'pc')
+        self.assertEqual(metadata['color_space'], 'bt709')
+        self.assertEqual(metadata['color_transfer'], 'bt709')
+        self.assertEqual(metadata['color_primaries'], 'bt709')
+        entries = next(arg for arg in self.probe_command if arg.startswith('stream='))
+        for field in ('sample_aspect_ratio', 'color_range', 'color_space', 'color_transfer', 'color_primaries'):
+            self.assertIn(field, entries)
 
     def test_missing_timestamps_use_provisional_rate_and_unknown_frame_count(self):
         metadata = self.probe(
