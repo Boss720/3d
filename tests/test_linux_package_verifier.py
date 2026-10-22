@@ -3,6 +3,7 @@ from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 import sys
+import signal
 import unittest
 import uuid
 
@@ -10,10 +11,19 @@ import uuid
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
-from verify_linux_package import multipart, assert_bundled_ui
+from verify_linux_package import multipart, assert_bundled_ui, assert_clean_shutdown
 
 
 class LinuxPackageVerifierTests(unittest.TestCase):
+    def test_shutdown_requires_cleanup_evidence_even_for_expected_signal_exit(self):
+        marker = 'StereoLab shutdown complete.'
+        for code in (0, -signal.SIGTERM):
+            assert_clean_shutdown(code, marker)
+            with self.assertRaisesRegex(RuntimeError, 'cleanup'):
+                assert_clean_shutdown(code, 'server started')
+        with self.assertRaisesRegex(RuntimeError, 'exit'):
+            assert_clean_shutdown(-9, marker)
+
     def test_bundled_ui_uses_pyinstaller_internal_directory(self):
         package = Path(__file__).resolve().parents[1] / '.runtime' / 'linux-verifier-tests' / uuid.uuid4().hex
         package.mkdir(parents=True)

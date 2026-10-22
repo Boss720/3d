@@ -1315,6 +1315,7 @@ async def application_lifespan(app):
         store.close()
         HISTORY = None
         WORKER = None
+        print('StereoLab shutdown complete.', flush=True)
 
 
 app = FastAPI(title="StereoLab", docs_url=None, redoc_url=None, lifespan=application_lifespan)

@@ -197,6 +197,14 @@ def assert_package_read_only(package: Path) -> None:
             raise RuntimeError(f'package path remains writable: {path}')
 
 
+def assert_clean_shutdown(returncode: int, server_log: str) -> None:
+    # Uvicorn re-raises the captured signal after lifespan shutdown completes.
+    if returncode not in (0, -signal.SIGTERM):
+        raise RuntimeError(f'unexpected shutdown exit status: {returncode}')
+    if 'StereoLab shutdown complete.' not in server_log:
+        raise RuntimeError('shutdown has no evidence that worker/history cleanup completed')
+
+
 def assert_bundled_ui(package: Path) -> None:
     # PyInstaller 6 one-directory builds place collected data in _internal.
     if not (package / '_internal' / 'static' / 'index.html').is_file():
@@ -340,8 +348,8 @@ def main() -> int:
                                              'output-audio-frame-count-and-full-decode'])
                 process.send_signal(signal.SIGTERM)
                 process.wait(timeout=20)
-                if process.returncode != 0:
-                    raise RuntimeError(f'graceful SIGTERM returned {process.returncode}')
+                assert_clean_shutdown(process.returncode, log_path.read_text(encoding='utf-8', errors='replace'))
+                result['shutdown_returncode'] = process.returncode
                 result['checks'].append('sigterm-shutdown')
         finally:
             if process is not None and process.poll() is None:
