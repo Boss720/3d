@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from calibration import measure_inputs
 from depth_engine import MODEL_SPECS, ModelManager
 
 SMALL = 'depth-anything-v2-small'
@@ -294,11 +295,100 @@ class EngineTest(unittest.TestCase):
                     'fp16_small_model': True, 'native_depth_output': True}
         hardware = {'selected_adapter': None, 'adapters': [], 'error': None}
         ort = SimpleNamespace(get_available_providers=lambda: ['CPUExecutionProvider'], __version__='fake')
-        with patch('depth_engine.probe_hardware', return_value=hardware):
+        with patch('depth_engine.probe_hardware', return_value=hardware), patch('sys.platform', 'win32'):
             with patch.object(self.manager, '_ort', return_value=ort):
                 self.assertEqual(ModelManager.runtime_info(self.manager)['capabilities'], expected)
             with patch.object(self.manager, '_ort', side_effect=RuntimeError('not installed')):
                 self.assertEqual(ModelManager.runtime_info(self.manager)['capabilities'], expected)
+
+    def test_linux_cpu_runtime_reports_supported_modes_without_directml_claims(self):
+        ort = SimpleNamespace(get_available_providers=lambda: ['CPUExecutionProvider'], __version__='fake')
+        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', return_value=ort):
+            runtime = ModelManager.runtime_info(self.manager)
+        self.assertTrue(runtime['available'])
+        self.assertFalse(runtime['gpu_available'])
+        self.assertEqual(runtime['supported_execution_modes'], ['auto', 'cpu'])
+        self.assertFalse(runtime['capabilities']['named_models_directml'])
+        self.assertFalse(runtime['capabilities']['gpu_retry_supported'])
+        self.assertIsNone(runtime['capabilities']['directml_graph_transform_version'])
+        self.assertIn('CPU', runtime['gpu_error'])
+        self.assertNotIn('DXGI', runtime['gpu_error'])
+        self.assertIn('CPU', runtime['gpu_memory_policy'])
+        self.assertNotIn('DirectML', runtime['gpu_memory_policy'])
+
+    def test_linux_model_catalog_does_not_claim_gpu_support(self):
+        with patch('sys.platform', 'linux'):
+            catalog = self.manager.catalog()
+        for entry in catalog['models']:
+            with self.subTest(model=entry['id']):
+                self.assertNotRegex(entry['description'], r'(?i)DirectML|GPU|falls? back')
+
+    def test_linux_capabilities_survive_unavailable_runtime(self):
+        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', side_effect=RuntimeError('not installed')):
+            runtime = ModelManager.runtime_info(self.manager)
+        self.assertFalse(runtime['available'])
+        self.assertFalse(runtime['capabilities']['named_models_directml'])
+        self.assertEqual(runtime['supported_execution_modes'], ['auto', 'cpu'])
+
+    def test_linux_ignores_unqualified_gpu_providers_and_never_probes_windows_hardware(self):
+        ort = SimpleNamespace(get_available_providers=lambda: ['CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider'], __version__='fake')
+        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', return_value=ort), patch('depth_engine.probe_hardware') as probe:
+            runtime = ModelManager.runtime_info(self.manager)
+        probe.assert_not_called()
+        self.assertFalse(runtime['gpu_available'])
+        self.assertIsNone(runtime['gpu_device'])
+        self.assertEqual(self.manager._execution_plan(SMALL, 'auto', runtime)[0], 'CPUExecutionProvider')
+        for mode in ('gpu', 'hybrid'):
+            with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'Linux.*CPU.*Auto'):
+                self.manager._execution_plan(SMALL, mode, runtime)
+
+    def test_linux_auto_and_cpu_inference_use_only_cpu_without_graph_transforms(self):
+        self.accepted(SMALL)
+        ort = SimpleNamespace(get_available_providers=lambda: ['CPUExecutionProvider'], __version__='fake')
+        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', return_value=ort):
+            runtime = ModelManager.runtime_info(self.manager)
+        with patch('sys.platform', 'linux'), patch.object(self.manager, 'runtime_info', return_value=runtime), patch.object(self.manager, '_new_session', return_value=FakeSession()) as created, patch.object(self.manager, '_gpu_graph') as graph:
+            for mode in ('auto', 'cpu'):
+                with self.subTest(mode=mode):
+                    depth, info = self.manager.predict_with_info(np.zeros((8, 8, 3), np.uint8), SMALL, execution_mode=mode)
+                    self.assertEqual(depth.shape, (8, 8))
+                    self.assertEqual(info['active_provider'], 'CPUExecutionProvider')
+                    self.assertEqual(info['device'], 'CPU')
+                    self.assertFalse(info['gpu_verified'])
+                    self.assertIsNone(info['fallback_reason'])
+            self.assertEqual(created.call_count, 1)
+            graph.assert_not_called()
+
+    def test_linux_auto_inference_is_valid_calibration_evidence(self):
+        self.accepted(SMALL)
+        ort = SimpleNamespace(get_available_providers=lambda: ['CPUExecutionProvider'], __version__='fake')
+        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', return_value=ort):
+            runtime = ModelManager.runtime_info(self.manager)
+        session = FakeSession()
+        frame = np.zeros((8, 8, 3), np.uint8)
+        with patch('sys.platform', 'linux'), patch.object(self.manager, 'runtime_info', return_value=runtime), \
+                patch.object(self.manager, '_new_session', return_value=session):
+            now = [0.0]
+            def clock():
+                now[0] += .1
+                return now[0]
+            result = measure_inputs(
+                lambda size: self.manager.predict_with_info(frame, SMALL, size, execution_mode='auto')[1],
+                {'model': SMALL, 'runtime': 'linux-cpu'}, budget_seconds=5, sizes=(128,), clock=clock)
+        self.assertTrue(result['sufficient_evidence'], result['candidates'])
+        self.assertEqual(result['fastest_measured_input_size'], 128)
+        self.assertIsNone(result['candidates'][0]['execution']['fallback_reason'])
+
+    def test_linux_strict_modes_reject_before_model_or_session_work(self):
+        ort = SimpleNamespace(get_available_providers=lambda: ['CPUExecutionProvider'], __version__='fake')
+        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', return_value=ort):
+            runtime = ModelManager.runtime_info(self.manager)
+        with patch.object(self.manager, 'runtime_info', return_value=runtime), patch.object(self.manager, '_accepted') as accepted, patch.object(self.manager, '_new_session') as created:
+            for mode in ('gpu', 'hybrid'):
+                with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'Linux.*CPU.*Auto'):
+                    self.manager.predict(np.zeros((8, 8, 3), np.uint8), SMALL, execution_mode=mode)
+            accepted.assert_not_called()
+            created.assert_not_called()
 
     def test_unknown_or_zero_memory_conservatively_caps_large(self):
         self.accepted(LARGE)
@@ -601,7 +691,7 @@ class EngineTest(unittest.TestCase):
     def test_runtime_registration_is_available_but_unverified_and_inactive(self):
         adapter = self.gpu_runtime()['gpu_device']
         ort = SimpleNamespace(get_available_providers=lambda: ['DmlExecutionProvider', 'CPUExecutionProvider'], __version__='fake')
-        with patch.object(self.manager, '_ort', return_value=ort), patch('depth_engine.probe_hardware', return_value={'selected_adapter': adapter, 'adapters': [adapter], 'error': None}):
+        with patch.object(self.manager, '_ort', return_value=ort), patch('sys.platform', 'win32'), patch('depth_engine.probe_hardware', return_value={'selected_adapter': adapter, 'adapters': [adapter], 'error': None}):
             info = ModelManager.runtime_info(self.manager)
             self.assertTrue(info['gpu_available'])
             self.assertFalse(info['gpu_verified'])

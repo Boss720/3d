@@ -49,6 +49,10 @@ To build from source, developers can run:
 
 Building the installer also requires Inno Setup 6. For current test coverage and known limits, see [RELEASE_READINESS.md](RELEASE_READINESS.md).
 
+## Linux CPU build
+
+A native Linux x86-64 CPU package can be built on Ubuntu 22.04 to retain the intended glibc baseline. Install Python 3.12, FFmpeg, and the system OpenCV libraries, then run `bash ./scripts/build-linux.sh`. The archive and checksum are written under `.runtime/linux-build/release/`. See [LINUX.md](LINUX.md) for launch instructions and storage paths. Linux GPU inference is not included. The published GitHub release currently contains Windows downloads only.
+
 ## NVIDIA GTX GPU and CPU cooperation
 
 For Windows GPU acceleration, run `.\setup-gpu.ps1` once, then restart with `.\run.ps1`.

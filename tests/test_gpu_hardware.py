@@ -26,13 +26,21 @@ class HardwareTest(unittest.TestCase):
     def test_probe_is_cached_and_preserves_enumeration_errors(self):
         probe_hardware.cache_clear()
         self.addCleanup(probe_hardware.cache_clear)
-        with patch('gpu_hardware.enumerate_adapters', side_effect=RuntimeError('DXGI unavailable')) as enumerate_:
+        with patch('gpu_hardware.sys.platform', 'win32'), patch('gpu_hardware.enumerate_adapters', side_effect=RuntimeError('DXGI unavailable')) as enumerate_:
             first = probe_hardware()
             second = probe_hardware()
             self.assertEqual(first, second)
             self.assertEqual(enumerate_.call_count, 1)
             self.assertIn('DXGI unavailable', first['error'])
             self.assertEqual(first['adapters'], [])
+
+    def test_linux_cpu_probe_does_not_enumerate_dxgi(self):
+        probe_hardware.cache_clear()
+        self.addCleanup(probe_hardware.cache_clear)
+        with patch('gpu_hardware.sys.platform', 'linux'), patch('gpu_hardware.enumerate_adapters') as enumerate_:
+            result = probe_hardware()
+        enumerate_.assert_not_called()
+        self.assertEqual(result, {'adapters': [], 'selected_adapter': None, 'error': None})
 
 
 if __name__ == '__main__':

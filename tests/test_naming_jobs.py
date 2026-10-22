@@ -73,6 +73,12 @@ class NamingJobTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 self.assertEqual(self.submit(**invalid).status_code, 400)
 
+    def test_linux_normalizes_stale_amd_decode_request_to_software(self):
+        with patch.object(main.sys, 'platform', 'linux'):
+            response = self.submit(video_decode='amd')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['settings']['video_decode'], 'software')
+
     def test_invalid_template_rejects_before_model_validation_or_application_upload(self):
         for template in ('../{name}', '{name!r}', '{model.path}', 'x' * 121, ''):
             with self.subTest(template=template), patch.object(main, 'validate_depth_mode') as validate, \

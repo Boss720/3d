@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-from preflight import inspect_media
+from preflight import _check_encoder, inspect_media
 
 
 class PreflightTests(unittest.TestCase):
@@ -181,6 +181,45 @@ class PreflightTests(unittest.TestCase):
         with patch('preflight.open_preflight_capture', return_value=self.capture()):
             with self.assertRaisesRegex(RuntimeError, 'Install FFmpeg|install FFmpeg'):
                 inspect_media(self.source, 'video', 'SBS', 'source', self.root, None)
+
+    def test_missing_or_invalid_ffmpeg_reports_platform_neutral_install_guidance(self):
+        for value in (None, str(self.root / 'missing-ffmpeg')):
+            with self.subTest(value=value), patch('preflight.shutil.which', return_value=None):
+                with self.assertRaises(RuntimeError) as error:
+                    _check_encoder(value)
+                message = str(error.exception)
+                self.assertIn('FFmpeg', message)
+                self.assertIn('FFprobe', message)
+                self.assertIn('VIDEO3D_FFMPEG', message)
+                self.assertNotIn('ffmpeg.exe', message)
+        self.run_mock.assert_not_called()
+
+    def test_linux_discovery_ignores_windows_owl3d_fallback(self):
+        import main
+        binary = self.root / 'owl3d-desktop-app' / 'app-1.2.3' / 'resources' / 'bin' / 'win' / 'x64' / 'ffmpeg.exe'
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b'Windows executable')
+        with patch.dict(os.environ, {'VIDEO3D_FFMPEG': '', 'LOCALAPPDATA': str(self.root)}), patch('main.shutil.which', return_value=None), patch('sys.platform', 'linux'):
+            self.assertIsNone(main.find_ffmpeg())
+        with patch.dict(os.environ, {'VIDEO3D_FFMPEG': '', 'LOCALAPPDATA': str(self.root)}), patch('main.shutil.which', return_value=None), patch('sys.platform', 'win32'):
+            self.assertEqual(main.find_ffmpeg(), str(binary.resolve()))
+
+    def test_linux_discovery_prefers_explicit_ffmpeg_then_path(self):
+        import main
+        with patch('sys.platform', 'linux'), patch.dict(os.environ, {'VIDEO3D_FFMPEG': str(self.ffmpeg)}), patch('main.shutil.which', return_value='/usr/bin/ffmpeg') as which:
+            self.assertEqual(main.find_ffmpeg(), str(self.ffmpeg.resolve()))
+            which.assert_not_called()
+        with patch('sys.platform', 'linux'), patch.dict(os.environ, {'VIDEO3D_FFMPEG': ''}), patch('main.shutil.which', return_value='/usr/bin/ffmpeg'):
+            self.assertEqual(main.find_ffmpeg(), '/usr/bin/ffmpeg')
+
+    def test_run_video_missing_ffmpeg_reports_ffprobe_and_binary_guidance(self):
+        import main
+        with patch.object(main, 'FFMPEG_PATH', None), self.assertRaises(RuntimeError) as error:
+            main.run_video(SimpleNamespace(input_path=self.source), None)
+        message = str(error.exception)
+        self.assertIn('FFprobe', message)
+        self.assertIn('VIDEO3D_FFMPEG', message)
+        self.assertNotIn('ffmpeg.exe', message)
 
     def test_encoder_probe_is_cached_and_replaced_binary_invalidates_it(self):
         self.video(self.capture())

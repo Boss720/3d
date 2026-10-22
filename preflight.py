@@ -16,6 +16,8 @@ from stereo import LAYOUTS, layout_size
 
 MINIMUM_FREE_BYTES = 16 * 1024**2
 ENCODER_PROBE_TIMEOUT_SECONDS = 6
+FFMPEG_INSTALL_GUIDANCE = ('Install FFmpeg with FFprobe beside it, add its folder to PATH, '
+                           'or set VIDEO3D_FFMPEG to the FFmpeg executable.')
 
 
 @lru_cache(maxsize=32)
@@ -36,7 +38,7 @@ def _libx264_available(binary: str, size: int, modified_ns: int) -> bool:
 
 def _check_encoder(ffmpeg: str | None) -> None:
     if not ffmpeg:
-        raise RuntimeError('Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe before converting video.')
+        raise RuntimeError(FFMPEG_INSTALL_GUIDANCE)
     try:
         binary = Path(ffmpeg).expanduser()
         if not binary.is_file():
@@ -47,7 +49,7 @@ def _check_encoder(ffmpeg: str | None) -> None:
         binary = binary.resolve()
         stat = binary.stat()
     except OSError:
-        raise RuntimeError('Install FFmpeg or correct VIDEO3D_FFMPEG so it points to a readable ffmpeg.exe.') from None
+        raise RuntimeError('The configured FFmpeg executable is missing or unreadable. ' + FFMPEG_INSTALL_GUIDANCE) from None
     if not _libx264_available(os.path.normcase(str(binary)), stat.st_size, stat.st_mtime_ns):
         raise RuntimeError('This FFmpeg has no libx264 encoder required for software fallback. Install an FFmpeg build with libx264 support.')
 
@@ -200,7 +202,7 @@ def inspect_media(source: Path, media_type: str, layout: str, resolution: str,
         total_frames, fps, fps_provisional = 1, None, False
     else:
         if not ffmpeg:
-            raise RuntimeError('Install FFmpeg or set VIDEO3D_FFMPEG before converting video.')
+            raise RuntimeError(FFMPEG_INSTALL_GUIDANCE)
         source_width, source_height, total_frames, fps, fps_provisional = _read_video(
             source, warnings, ffmpeg, cancel_event)
         _check_encoder(ffmpeg)

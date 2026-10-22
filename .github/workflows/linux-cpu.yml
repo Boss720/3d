@@ -1,0 +1,127 @@
+name: Linux CPU build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional package version label
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  linux-tests:
+    name: Tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-test.txt
+      - name: Install Linux media and OpenCV libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg language-pack-en libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
+          sudo locale-gen en_US.UTF-8
+          sudo update-locale LANG=en_US.UTF-8
+      - name: Install test environment
+        run: python -m pip install -r requirements-test.txt
+      - name: Run full suite
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v
+
+  linux-package:
+    name: Build Linux CPU candidate
+    needs: linux-tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-linux-build.txt
+      - name: Install Linux media and OpenCV libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg language-pack-en libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
+          sudo locale-gen en_US.UTF-8
+          sudo update-locale LANG=en_US.UTF-8
+      - name: Build native Linux archive
+        env:
+          STEREOLAB_VERSION: ${{ inputs.version }}
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: bash scripts/build-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stereolab-linux-x86_64-cpu-candidate
+          path: |
+            .runtime/linux-build/release/*.tar.gz
+            .runtime/linux-build/release/*.tar.gz.sha256
+            .runtime/linux-build/dist/StereoLab/build-report.json
+            .runtime/linux-build/dist/StereoLab/requirements-resolved.txt
+            .runtime/linux-build/dist/StereoLab/native-dependencies.json
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true
+
+  linux-package-acceptance:
+    name: Test exact archive on ${{ matrix.os }}
+    needs: linux-package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare ONNX Runtime locale
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg language-pack-en
+          sudo locale-gen en_US.UTF-8
+          sudo update-locale LANG=en_US.UTF-8
+      - uses: actions/download-artifact@v4
+        with:
+          name: stereolab-linux-x86_64-cpu-candidate
+          path: .runtime/linux-build/candidate
+      - name: Verify checksum, extract and launch the exact candidate
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: |
+          set -Eeuo pipefail
+          candidate="$(find .runtime/linux-build/candidate -type f -name '*.tar.gz' -print -quit)"
+          test -n "$candidate"
+          (cd "$(dirname "$candidate")" && sha256sum -c "$(basename "$candidate").sha256")
+          mkdir -p .runtime/linux-build/extracted
+          tar -xzf "$candidate" -C .runtime/linux-build/extracted
+          python scripts/verify_linux_package.py .runtime/linux-build/extracted/StereoLab \
+            --make-read-only \
+            --model-smoke \
+            --report .runtime/linux-build/package-acceptance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stereolab-linux-package-acceptance-${{ matrix.os }}
+          path: .runtime/linux-build/package-acceptance.json
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true

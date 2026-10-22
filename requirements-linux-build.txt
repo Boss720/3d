@@ -1,0 +1,3 @@
+# CPU-only runtime and a pinned Linux packaging toolchain.
+-r requirements.txt
+pyinstaller==6.22.3

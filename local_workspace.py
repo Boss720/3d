@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterable, Mapping
 
@@ -118,15 +120,31 @@ def open_folder(value: str | Path) -> None:
     path = _plain_path(value)
     if not path.is_dir():
         raise ValueError('Folder does not exist.')
-    if os.name != 'nt':
-        raise RuntimeError('Desktop folder actions are supported on Windows.')
-    subprocess.Popen(['explorer.exe', str(path)], shell=False)
+    if os.name == 'nt':
+        subprocess.Popen(['explorer.exe', str(path)], shell=False)
+        return
+    _open_linux_location(path)
 
 
 def reveal_file(value: str | Path) -> None:
     path = _plain_path(value)
     if not path.is_file():
         raise ValueError('Output file does not exist.')
-    if os.name != 'nt':
-        raise RuntimeError('Desktop folder actions are supported on Windows.')
-    subprocess.Popen(['explorer.exe', '/select,', str(path)], shell=False)
+    if os.name == 'nt':
+        subprocess.Popen(['explorer.exe', '/select,', str(path)], shell=False)
+        return
+    # Linux desktop environments do not share a portable file-selection API.
+    # Opening the containing folder is safe and works with the common openers.
+    _open_linux_location(path.parent)
+
+
+def _open_linux_location(path: Path) -> None:
+    if not sys.platform.startswith('linux'):
+        raise RuntimeError('Desktop folder actions are supported on Windows and Linux.')
+    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+        raise RuntimeError('Cannot open a folder: no graphical desktop session is available.')
+    opener = shutil.which('xdg-open') or shutil.which('gio')
+    if not opener:
+        raise RuntimeError('Cannot open a folder: install xdg-open or gio and try again.')
+    command = [opener, 'open', str(path)] if Path(opener).name == 'gio' else [opener, str(path)]
+    subprocess.Popen(command, shell=False)

@@ -46,7 +46,7 @@ from preview_cache import PreviewDepthCache
 from preview_clip import ClipCancelled, prepare_preview_clip
 from preview_policy import (PREVIEW_UPLOAD_BYTES, PreviewPolicyError, preview_source_policy,
                             validate_preview_detail, validate_preview_upload_size)
-from preflight import inspect_media, video_metadata
+from preflight import FFMPEG_INSTALL_GUIDANCE, inspect_media, video_metadata
 from telemetry import StageTimings
 from calibration import CalibrationStore, measure_inputs
 from resource_sampling import process_snapshot
@@ -56,20 +56,19 @@ from video_pipeline import PipelineCancelled, run_pipeline
 from video_depth import VideoDepthEstimator
 from video_decoder import DecoderCancelled, open_video_capture
 from upload_admission import UploadAdmissionMiddleware
+from platform_paths import resolve_paths
 
 
 FROZEN = bool(getattr(sys, "frozen", False))
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-DATA_ROOT = (
-    Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "StereoLab"
-    if FROZEN else ROOT
-)
+PATHS = resolve_paths(frozen=FROZEN, root=ROOT)
+DATA_ROOT = PATHS.data_root
 STATIC = ROOT / "static"
-RUNTIME = DATA_ROOT / ".runtime"
-UPLOADS = RUNTIME / "uploads"
-MODELS = RUNTIME / "models"
-OUTPUTS = DATA_ROOT / "outputs"
-CLIP_PROXIES = RUNTIME / "clip-proxies"
+RUNTIME = PATHS.runtime
+UPLOADS = PATHS.uploads
+MODELS = PATHS.models
+OUTPUTS = PATHS.outputs
+CLIP_PROXIES = PATHS.clip_proxies
 MODEL_PATH = MODELS / "depth.onnx"
 
 VIDEO_EXTENSIONS = {
@@ -99,7 +98,7 @@ EXECUTION_LOCAL = threading.local()
 PREVIEW_CACHE = PreviewDepthCache()
 VIDEO_DEPTH_CACHE: DepthCache | None = None
 DEPTH_CACHE_START_LOCK = threading.Lock()
-CALIBRATIONS = CalibrationStore(RUNTIME / 'calibrations.json')
+CALIBRATIONS = CalibrationStore(PATHS.calibration_file)
 
 
 def find_ffmpeg() -> str | None:
@@ -111,8 +110,10 @@ def find_ffmpeg() -> str | None:
     if found:
         return found
 
-    # Reuse the local FFmpeg utility already present on this machine, when
+    # Reuse the Windows FFmpeg utility already present on this machine, when
     # available. It is not copied into or redistributed with this project.
+    if sys.platform != 'win32':
+        return None
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         install_root = Path(local_app_data) / "owl3d-desktop-app"
@@ -600,7 +601,7 @@ def get_video_depth_store() -> DepthCache:
     global VIDEO_DEPTH_CACHE
     with DEPTH_CACHE_START_LOCK:
         if VIDEO_DEPTH_CACHE is None:
-            VIDEO_DEPTH_CACHE = DepthCache(RUNTIME / 'depth-cache')
+            VIDEO_DEPTH_CACHE = DepthCache(PATHS.depth_cache)
         return VIDEO_DEPTH_CACHE
 
 
@@ -781,7 +782,7 @@ def run_video(job: Job, net: cv2.dnn_Net | None, _force_software: bool = False,
               _cache_bypass: bool = False) -> Path:
     ffmpeg = FFMPEG_PATH
     if not ffmpeg or not Path(ffmpeg).is_file():
-        raise RuntimeError("FFmpeg was not found. Install FFmpeg or set VIDEO3D_FFMPEG to ffmpeg.exe.")
+        raise RuntimeError("FFmpeg was not found. " + FFMPEG_INSTALL_GUIDANCE)
     source = job.preview_source_path or job.input_path
     cache = VideoDepthCacheSession(job, bypass=_cache_bypass)
     try:
@@ -1237,7 +1238,8 @@ def ensure_worker() -> None:
 
 
 def history_capabilities() -> dict[str, Any]:
-    result = (HISTORY or HistoryStore(DATA_ROOT)).status()
+    history_root = PATHS.history_root if FROZEN and sys.platform.startswith("linux") else DATA_ROOT
+    result = (HISTORY or HistoryStore(history_root)).status()
     if HISTORY_WARNING and result['enabled']:
         result.update(state='degraded', warning=HISTORY_WARNING)
     return result
@@ -1279,7 +1281,8 @@ def require_history_admission() -> None:
 async def application_lifespan(app):
     global HISTORY, HISTORY_WARNING, ACCEPTING_MUTATIONS, WORKER
     # Configuration and lease acquisition precede worker creation or serving.
-    store = HistoryStore.from_environment(DATA_ROOT)
+    history_root = PATHS.history_root if FROZEN and sys.platform.startswith("linux") else DATA_ROOT
+    store = HistoryStore.from_environment(history_root)
     store.open()
     HISTORY, HISTORY_WARNING = store, None
     ACCEPTING_MUTATIONS = True
@@ -1895,6 +1898,10 @@ async def create_job(
     if video_decode not in {'software', 'amd'}:
         await file.close()
         raise HTTPException(status_code=400, detail="Choose software or AMD video decoding.")
+    if sys.platform.startswith('linux') and video_decode == 'amd':
+        # D3D11VA is Windows-only. Normalize stale saved/API settings so the
+        # job metadata matches the software decoder that Linux will actually use.
+        video_decode = 'software'
     extension = Path(filename).suffix.lower()
     if purpose not in {'export', 'preview_clip'}:
         await file.close()
@@ -1944,7 +1951,7 @@ async def create_job(
         raise HTTPException(status_code=400, detail="Temporal smoothing must be between 0 and 0.9.")
     if extension in VIDEO_EXTENSIONS and not FFMPEG_PATH:
         await file.close()
-        raise HTTPException(status_code=409, detail="FFmpeg is needed for video export. Install it or set VIDEO3D_FFMPEG.")
+        raise HTTPException(status_code=409, detail="FFmpeg is needed for video export. " + FFMPEG_INSTALL_GUIDANCE)
 
     if purpose == 'export':
         try:

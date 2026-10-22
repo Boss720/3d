@@ -117,6 +117,38 @@ class LocalWorkspaceTests(unittest.TestCase):
                 workspace.reveal_file(output.parent / 'missing')
             self.assertEqual(popen.call_count, 2)
 
+    def test_linux_folder_opener_uses_xdg_open_without_shell(self):
+        folder = self.roots['outputs']
+        with patch.object(workspace.sys, 'platform', 'linux'), \
+                patch.dict(workspace.os.environ, {'DISPLAY': ':1'}, clear=True), \
+                patch.object(workspace.shutil, 'which', return_value='/usr/bin/xdg-open'), \
+                patch.object(workspace.subprocess, 'Popen') as popen:
+            workspace._open_linux_location(folder)
+        popen.assert_called_once_with(['/usr/bin/xdg-open', str(folder)], shell=False)
+
+    def test_linux_folder_opener_supports_gio_fallback(self):
+        folder = self.roots['outputs']
+        with patch.object(workspace.sys, 'platform', 'linux'), \
+                patch.dict(workspace.os.environ, {'WAYLAND_DISPLAY': 'wayland-0'}, clear=True), \
+                patch.object(workspace.shutil, 'which', side_effect=lambda name: '/usr/bin/gio' if name == 'gio' else None), \
+                patch.object(workspace.subprocess, 'Popen') as popen:
+            workspace._open_linux_location(folder)
+        popen.assert_called_once_with(['/usr/bin/gio', 'open', str(folder)], shell=False)
+
+    def test_linux_folder_opener_reports_headless_or_missing_helper(self):
+        folder = self.roots['outputs']
+        with patch.object(workspace.sys, 'platform', 'linux'), \
+                patch.dict(workspace.os.environ, {}, clear=True), \
+                patch.object(workspace.shutil, 'which') as which:
+            with self.assertRaisesRegex(RuntimeError, 'no graphical desktop session'):
+                workspace._open_linux_location(folder)
+            which.assert_not_called()
+        with patch.object(workspace.sys, 'platform', 'linux'), \
+                patch.dict(workspace.os.environ, {'DISPLAY': ':1'}, clear=True), \
+                patch.object(workspace.shutil, 'which', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'install xdg-open or gio'):
+                workspace._open_linux_location(folder)
+
 
 if __name__ == '__main__':
     unittest.main()

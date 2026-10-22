@@ -12,6 +12,7 @@ import errno
 import importlib
 import json
 import os
+import sys
 import threading
 import time
 import urllib.error
@@ -93,6 +94,15 @@ MODEL_SPECS = {
 }
 
 
+LINUX_MODEL_DESCRIPTIONS = {
+    'depth-anything-v2-small': 'Recommended starting point for CPU inference. FP32 relative inverse depth; about 99 MB.',
+    'depth-anything-v2-small-fp16': 'Optional FP16 weights, about 49.6 MB. Reduced precision can change depth results; speed depends on the CPU and runtime.',
+    'depth-anything-v2-base': 'Higher memory use on CPU. Non-commercial weights.',
+    'depth-anything-v2-large': 'About 1.34 GB download; high memory use on CPU. Non-commercial weights.',
+    'dpt-hybrid-midas': 'MiDaS 3.0 DPT Hybrid; fixed 384 px input; CPU inference. Relative inverse depth.',
+}
+
+
 class ModelManager:
     def __init__(self, models_dir: Path):
         self.models_dir = Path(models_dir)
@@ -134,15 +144,28 @@ class ModelManager:
             raise RuntimeError("ONNX Runtime is unavailable. Install the requirements and restart the server. " + str(exc)) from exc
 
     def runtime_info(self) -> dict[str, Any]:
-        hardware = probe_hardware()
+        windows = sys.platform == 'win32'
+        hardware = probe_hardware() if windows else {'selected_adapter': None, 'adapters': [], 'error': None}
         adapter = hardware['selected_adapter']
         last = self.execution_info()
+        capabilities = dict(RUNTIME_CAPABILITIES)
+        if not windows:
+            capabilities.update({
+                'named_models_directml': False, 'gpu_max_input_dimension': None,
+                'large_limited_gpu_max_input_dimension': None, 'limited_gpu_memory_mb': None,
+                'unknown_memory_policy': 'unsupported', 'gpu_failure_cooldown_seconds': None,
+                'gpu_retry_supported': False, 'directml_static_input_dimensions': False,
+                'directml_resize_policy': None, 'directml_graph_transform_version': None,
+            })
+        supported_modes = list(EXECUTION_MODES) if windows else ['auto', 'cpu']
+        cpu_gpu_error = ('Linux builds currently support CPU inference only. Choose CPU or Auto.' if sys.platform.startswith('linux')
+                         else 'This platform currently supports CPU inference only. Choose CPU or Auto.')
         try:
             ort = self._ort()
             providers = ort.get_available_providers()
             available = CPU_PROVIDER in providers
-            gpu_available = GPU_PROVIDER in providers and adapter is not None
-            gpu_error = (None if gpu_available else hardware['error'] or
+            gpu_available = windows and GPU_PROVIDER in providers and adapter is not None
+            gpu_error = (cpu_gpu_error if not windows else None if gpu_available else hardware['error'] or
                          ('No physical DXGI graphics adapter was found.' if adapter is None else
                           'DirectML is unavailable in this ONNX Runtime. Use the GPU launcher/runtime.'))
             return {'available': available, 'providers': providers, 'active_provider': last['active_provider'],
@@ -152,15 +175,17 @@ class ModelManager:
                     'gpu_name': adapter['name'] if adapter else None, 'gpu_device': copy.deepcopy(adapter),
                     'gpu_error': gpu_error, 'adapters': copy.deepcopy(hardware['adapters']),
                     'last_execution': last,
-                    'capabilities': dict(RUNTIME_CAPABILITIES),
-                    'gpu_memory_policy': 'Best effort: all named models may try DirectML. Explicit GPU + CPU and NVIDIA GPU modes require the NVIDIA adapter and report GPU failures; Auto may fall back to CPU and retries after 60 seconds or a manual reset. Large is limited to a 518 px long side on adapters with 4 GB or less or unknown memory. DirectML has no hard VRAM limit; CPU nodes may remain.'}
+                    'capabilities': capabilities, 'supported_execution_modes': supported_modes,
+                    'gpu_memory_policy': ('CPU inference; GPU memory policies do not apply.' if not windows else
+                        'Best effort: all named models may try DirectML. Explicit GPU + CPU and NVIDIA GPU modes require the NVIDIA adapter and report GPU failures; Auto may fall back to CPU and retries after 60 seconds or a manual reset. Large is limited to a 518 px long side on adapters with 4 GB or less or unknown memory. DirectML has no hard VRAM limit; CPU nodes may remain.')}
         except Exception as exc:
             return {'available': False, 'providers': [], 'active_provider': last['active_provider'],
                     'device': last['device'], 'version': None, 'error': str(exc),
                     'gpu_available': False, 'gpu_verified': self._gpu_verified,
                     'gpu_name': adapter['name'] if adapter else None, 'gpu_device': copy.deepcopy(adapter),
-                    'gpu_error': str(exc), 'adapters': copy.deepcopy(hardware['adapters']), 'last_execution': last,
-                    'capabilities': dict(RUNTIME_CAPABILITIES)}
+                    'gpu_error': str(exc) if windows else cpu_gpu_error,
+                    'adapters': copy.deepcopy(hardware['adapters']), 'last_execution': last,
+                    'capabilities': capabilities, 'supported_execution_modes': supported_modes}
 
     def execution_info(self) -> dict[str, Any]:
         """Snapshot of the most recent inference, including any CPU fallback reason."""
@@ -183,6 +208,10 @@ class ModelManager:
         if execution_mode not in EXECUTION_MODES:
             raise ValueError(f'Unknown execution mode: {execution_mode}. Choose auto, cpu, gpu or hybrid.')
         if execution_mode == 'cpu':
+            return CPU_PROVIDER, None, None
+        if execution_mode == 'auto' and sys.platform != 'win32':
+            # CPU is the normal Auto choice on platforms without a qualified
+            # GPU backend, not a fallback from a failed GPU attempt.
             return CPU_PROVIDER, None, None
         adapter = runtime.get('gpu_device')
         reason = None
@@ -239,13 +268,16 @@ class ModelManager:
 
     def _public(self, model_id: str) -> dict[str, Any]:
         spec = self._spec(model_id)
+        description = spec['description']
+        if sys.platform.startswith('linux'):
+            description = LINUX_MODEL_DESCRIPTIONS[model_id]
         source = f"https://huggingface.co/{spec['repo']}"
         with self._lock:
             state = dict(self._states.get(model_id, {}))
         if not state or state.get("state") == "ready":
             accepted = self._accepted(model_id)
             state = {"state": "ready" if accepted else "not_installed", "progress": 100 if accepted else 0, "error": None}
-        return {"id": model_id, "name": spec["name"], "description": spec["description"],
+        return {"id": model_id, "name": spec["name"], "description": description,
                 "license": spec["license"], "source_url": source, "size_mb": round(spec["size"] / 1_000_000, 1),
                 "precision": spec.get("precision", "float32"), "filename": spec.get("filename", "model.onnx"),
                 "recommended": spec["recommended"], "revision": spec["revision"], "sha256": spec["sha256"],
@@ -266,9 +298,9 @@ class ModelManager:
         runtime = self.runtime_info()
         if not runtime["available"]:
             raise RuntimeError(runtime["error"])
+        self._execution_plan(model_id, execution_mode, runtime)
         if not self._accepted(model_id):
             raise RuntimeError(f"{self._spec(model_id)['name']} is not installed and validated. Install it in the model panel.")
-        self._execution_plan(model_id, execution_mode, runtime)
 
     def install(self, model_id: str) -> dict[str, Any]:
         self._spec(model_id)

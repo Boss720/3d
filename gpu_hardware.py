@@ -88,6 +88,10 @@ def select_adapter(adapters: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 @functools.lru_cache(maxsize=1)
 def probe_hardware() -> dict[str, Any]:
+    # The Linux release supports CPU inference. Do not probe Windows APIs or
+    # present the absence of DXGI as a broken CPU installation.
+    if sys.platform != 'win32':
+        return {'adapters': [], 'selected_adapter': None, 'error': None}
     try:
         adapters = enumerate_adapters()
         return {'adapters': adapters, 'selected_adapter': select_adapter(adapters), 'error': None}
