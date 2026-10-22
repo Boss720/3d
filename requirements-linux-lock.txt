@@ -1,0 +1,31 @@
+# Resolved by the native Ubuntu 22.04 x86-64 / Python 3.12.15 build at b26db2d.
+# Keep this separate from Windows runtime dependencies. Validate every update
+# with both Linux source suites and exact-archive acceptance on both targets.
+altgraph==0.17.5
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+click==8.5.0
+fastapi==0.159.1
+flatbuffers==25.12.19
+h11==0.16.0
+idna==3.20
+ml_dtypes==0.6.0
+numpy==2.5.4
+onnx==1.23.2
+onnxruntime==1.31.0
+opencv-python==5.0.0.93
+opentelemetry-api==1.45.1
+packaging==26.3
+pip==26.2.2
+protobuf==7.36.2
+pydantic==2.14.1
+pydantic_core==2.50.1
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+python-multipart==0.0.32
+setuptools==84.2.1
+starlette==1.9.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.54.0

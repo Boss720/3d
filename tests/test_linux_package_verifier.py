@@ -2,19 +2,39 @@
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
+import json
 import sys
 import signal
 import unittest
 import uuid
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
-from verify_linux_package import multipart, assert_bundled_ui, assert_clean_shutdown
+from verify_linux_package import multipart, assert_bundled_ui, assert_clean_shutdown, wait_for_job
 
 
 class LinuxPackageVerifierTests(unittest.TestCase):
+    def test_waiting_for_active_work_rejects_an_already_completed_job(self):
+        process = SimpleNamespace(poll=lambda: None)
+        payload = json.dumps([{'id': 'job', 'state': 'completed', 'frames_processed': 8}]).encode()
+        with patch('verify_linux_package.fetch', return_value=(200, payload)):
+            with self.assertRaisesRegex(RuntimeError, 'before the required running state'):
+                wait_for_job('http://localhost', 'job', process, 1,
+                             ready=lambda job: job.get('state') == 'processing')
+
+    def test_waiting_for_job_observes_transition_and_rejects_process_death(self):
+        process = SimpleNamespace(poll=lambda: None)
+        responses = [(200, json.dumps([{'id': 'job', 'state': state}]).encode())
+                     for state in ('processing', 'canceled')]
+        with patch('verify_linux_package.fetch', side_effect=responses), patch('verify_linux_package.time.sleep'):
+            self.assertEqual(wait_for_job('http://localhost', 'job', process, 1)['state'], 'canceled')
+        with self.assertRaisesRegex(RuntimeError, 'process exited'):
+            wait_for_job('http://localhost', 'job', SimpleNamespace(poll=lambda: 1), 1)
+
     def test_shutdown_requires_cleanup_evidence_even_for_expected_signal_exit(self):
         marker = 'StereoLab shutdown complete.'
         for code in (0, -signal.SIGTERM):

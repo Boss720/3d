@@ -1,6 +1,6 @@
 # StereoLab for Linux
 
-The planned Linux CPU build targets x86-64 with Ubuntu 22.04 as the glibc compatibility baseline. Ubuntu 24.04 is also included in the configured test matrix. These targets have not yet passed native package acceptance. The app runs as a local web app and listens only on `127.0.0.1`; open the printed address in a browser. Images and videos stay on this computer. Neural models download only after you choose **Install**.
+The Linux CPU candidate targets x86-64 with Ubuntu 22.04 as the glibc compatibility baseline. The `b26db2d` candidate passed packaged launch, named-model CPU inference, generated audio/video conversion, read-only/XDG storage and shutdown checks on Ubuntu 22.04 and 24.04. Real desktop integration, sustained representative exports and broader release qualification remain pending; every replacement candidate must repeat native acceptance. The app runs as a local web app and listens only on `127.0.0.1`; open the printed address in a browser. Images and videos stay on this computer. Neural models download only after you choose **Install**.
 
 The CPU package does not require Python. Install FFmpeg and FFprobe from your distribution to convert video. For Ubuntu, run `sudo apt install ffmpeg language-pack-en`, then generate and select the locale required by ONNX Runtime:
 

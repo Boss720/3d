@@ -146,6 +146,43 @@ class LinuxNoticeCollectorTests(unittest.TestCase):
 
         self.assertEqual([entry["name"] for entry in manifest["distributions"]], ["two"])
 
+    def test_flatbuffers_25_12_19_uses_vendored_upstream_license_fallback(self):
+        distribution = FakeDistribution("flatbuffers", "25.12.19", self.work, [])
+
+        with patch.object(collect_linux_notices, "_stdlib_license_path", return_value=None):
+            manifest = collect_linux_notices.collect_notices(
+                self.work / "bundle", distributions=[distribution], stdlib_license=None
+            )
+
+        row = manifest["distributions"][0]
+        self.assertFalse(row["missing_notice"])
+        self.assertEqual(len(row["files"]), 1)
+        entry = row["files"][0]
+        self.assertEqual(entry["provenance"]["source_version"], "25.12.19")
+        self.assertEqual(
+            entry["provenance"]["source_url"],
+            "https://raw.githubusercontent.com/google/flatbuffers/v25.12.19/LICENSE",
+        )
+        self.assertEqual(
+            entry["provenance"]["sha256"],
+            "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        )
+        copied = self.work / "bundle" / entry["copied_to"]
+        self.assertEqual(entry["sha256"], hashlib.sha256(copied.read_bytes()).hexdigest())
+        self.assertEqual(entry["provenance"]["sha256"], entry["sha256"])
+
+    def test_flatbuffers_other_versions_do_not_use_vendored_license_fallback(self):
+        distribution = FakeDistribution("flatbuffers", "25.12.20", self.work, [])
+
+        with patch.object(collect_linux_notices, "_stdlib_license_path", return_value=None):
+            manifest = collect_linux_notices.collect_notices(
+                self.work / "bundle", distributions=[distribution], stdlib_license=None
+            )
+
+        row = manifest["distributions"][0]
+        self.assertTrue(row["missing_notice"])
+        self.assertEqual(row["files"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

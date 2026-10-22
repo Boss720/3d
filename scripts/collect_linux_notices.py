@@ -21,6 +21,9 @@ from typing import Iterable
 
 
 MANIFEST_NAME = "THIRD_PARTY_NOTICES.json"
+FLATBUFFERS_FALLBACK_VERSION = "25.12.19"
+FLATBUFFERS_FALLBACK_URL = "https://raw.githubusercontent.com/google/flatbuffers/v25.12.19/LICENSE"
+FLATBUFFERS_FALLBACK_SHA256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 NOTICE_BASENAME = re.compile(
     r"^(?:licen[cs]e|copying|notice|copyright|third[-_.]?party[-_.]?notices?)(?:[-_.].*)?$",
     re.IGNORECASE,
@@ -97,6 +100,13 @@ def _stdlib_license_path() -> Path | None:
     return None
 
 
+def _flatbuffers_fallback_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "third_party" / "linux" / "flatbuffers" / FLATBUFFERS_FALLBACK_VERSION / "LICENSE"
+    )
+
+
 def collect_notices(
     output_dir: str | Path,
     *,
@@ -141,12 +151,30 @@ def collect_notices(
             relative = _safe_relative_path(item)
             candidates.append((relative, Path(distribution.locate_file(item))))
 
-        records: list[dict[str, str]] = []
+        records: list[dict[str, object]] = []
         prefix = f"distributions/{len(rows):04d}-{normalized_name}-{version}"
         for relative, source in sorted(candidates, key=lambda pair: pair[0].as_posix().casefold()):
             records.append(
                 _copy_record(source, bundle.joinpath(prefix, *relative.parts), relative.as_posix(), bundle)
             )
+        if not records and normalized_name == "flatbuffers" and version == FLATBUFFERS_FALLBACK_VERSION:
+            fallback = _flatbuffers_fallback_path()
+            if not fallback.is_file() or _sha256(fallback) != FLATBUFFERS_FALLBACK_SHA256:
+                raise ValueError(
+                    "vendored FlatBuffers 25.12.19 license is missing or does not match its recorded SHA256"
+                )
+            fallback_record = _copy_record(
+                fallback,
+                bundle.joinpath(prefix, "LICENSE"),
+                "LICENSE",
+                bundle,
+            )
+            fallback_record["provenance"] = {
+                "source_url": FLATBUFFERS_FALLBACK_URL,
+                "source_version": FLATBUFFERS_FALLBACK_VERSION,
+                "sha256": FLATBUFFERS_FALLBACK_SHA256,
+            }
+            records.append(fallback_record)
         rows.append({
             "name": name,
             "version": version,

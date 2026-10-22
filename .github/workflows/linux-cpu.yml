@@ -26,16 +26,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12.15'
           cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-test.txt
+            requirements-linux-lock.txt
       - name: Install Linux media and OpenCV libraries
         timeout-minutes: 10
         run: bash scripts/install-linux-ci-dependencies.sh
       - name: Install test environment
-        run: python -m pip install -r requirements-test.txt
+        run: python -m pip install -r requirements-test.txt -c requirements-linux-lock.txt
       - name: Run full suite
         env:
           LANG: en_US.UTF-8
@@ -51,9 +52,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12.15'
           cache: pip
-          cache-dependency-path: requirements-linux-build.txt
+          cache-dependency-path: |
+            requirements-linux-build.txt
+            requirements-linux-lock.txt
+            requirements.txt
       - name: Install Linux media and OpenCV libraries
         timeout-minutes: 10
         run: bash scripts/install-linux-ci-dependencies.sh
@@ -89,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12.15'
       - name: Prepare ONNX Runtime locale
         timeout-minutes: 10
         run: bash scripts/install-linux-ci-dependencies.sh
@@ -113,9 +117,10 @@ jobs:
             --model-smoke \
             --report .runtime/linux-build/package-acceptance.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: stereolab-linux-package-acceptance-${{ matrix.os }}
           path: .runtime/linux-build/package-acceptance.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
           include-hidden-files: true

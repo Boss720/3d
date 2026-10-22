@@ -28,7 +28,6 @@ if [[ ! -x "$VENV/bin/python" ]]; then
     "$PYTHON" -m venv "$VENV"
 fi
 BUILD_PYTHON="$VENV/bin/python"
-"$BUILD_PYTHON" -m pip install --upgrade pip
 "$BUILD_PYTHON" -m pip install -r requirements-linux-build.txt
 "$BUILD_PYTHON" -m pip check
 
@@ -60,7 +59,7 @@ if [[ ! "$VERSION" =~ ^[A-Za-z0-9._+-]+$ ]]; then
 fi
 
 "$BUILD_PYTHON" - "$PACKAGE/build-report.json" "$ROOT" "$VERSION" <<'PY'
-import json, platform, subprocess, sys
+import hashlib, json, platform, subprocess, sys
 from pathlib import Path
 root = Path(sys.argv[2])
 sys.path.insert(0, str(root))
@@ -75,6 +74,7 @@ report = {
     'architecture': platform.machine(),
     'platform': platform.platform(),
     'python': platform.python_version(),
+    'dependency_lock_sha256': hashlib.sha256((root / 'requirements-linux-lock.txt').read_bytes()).hexdigest(),
     'build_fingerprint': build_fingerprint(root),
     'source_commit': git('rev-parse', 'HEAD'),
     'working_tree_dirty': bool(git('status', '--porcelain')) if git('rev-parse', '--is-inside-work-tree') else None,
@@ -83,6 +83,7 @@ report = {
 print(json.dumps(report, sort_keys=True))
 PY
 "$BUILD_PYTHON" -m pip freeze --all > "$PACKAGE/requirements-resolved.txt"
+cp "$ROOT/requirements-linux-lock.txt" "$PACKAGE/requirements-linux-lock.txt"
 "$BUILD_PYTHON" scripts/verify_linux_elf.py "$PACKAGE" --report "$PACKAGE/native-dependencies.json"
 "$BUILD_PYTHON" scripts/collect_linux_notices.py --output "$PACKAGE/third-party-notices"
 

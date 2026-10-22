@@ -56,6 +56,120 @@ def multipart(fields: dict[str, str], filename: str, content_type: str,
     return b''.join(chunks), boundary
 
 
+def submit_video_job(base: str, fields: dict[str, str], filename: str, payload: bytes) -> str:
+    body, boundary = multipart(fields, filename, 'video/mp4', payload)
+    status, response = request(base + '/api/jobs', method='POST', body=body,
+                              headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
+                              timeout=30)
+    if status != 200:
+        raise RuntimeError(f'video job admission returned HTTP {status}: {response[:1000]!r}')
+    job_id = json.loads(response).get('id')
+    if not isinstance(job_id, str) or not job_id:
+        raise RuntimeError('video job admission returned no job ID')
+    return job_id
+
+
+def wait_for_job(base: str, job_id: str, process, timeout: float, *, ready=None) -> dict:
+    deadline = time.monotonic() + timeout
+    job = None
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError('packaged process exited while waiting for a job')
+        status, payload = fetch(base + '/api/jobs')
+        if status != 200:
+            raise RuntimeError(f'job catalog returned HTTP {status}')
+        job = next((item for item in json.loads(payload) if item.get('id') == job_id), None)
+        if job is None:
+            raise RuntimeError(f'job {job_id} disappeared')
+        terminal = job.get('state') in {'completed', 'failed', 'canceled'}
+        reached = ready(job) if ready is not None else terminal
+        if reached:
+            return job
+        if terminal:
+            raise RuntimeError(f'job finished before the required running state: {job}')
+        time.sleep(.1)
+    raise TimeoutError(f'job {job_id} exceeded {timeout:g}s: {job}')
+
+
+def queue_failed_then_valid(base: str, fields: dict[str, str], source: Path, process,
+                           timeout: float) -> tuple[str, str]:
+    status, payload = request(base + '/api/queue/control', method='POST',
+                              body=b'{"paused":true}', headers={'Content-Type': 'application/json'})
+    if status != 200 or json.loads(payload).get('paused') is not True:
+        raise RuntimeError('could not pause queue for failed-job recovery acceptance')
+    failed_id = submit_video_job(base, fields, 'invalid-input.mp4', b'not a media container')
+    valid_id = submit_video_job(base, fields, source.name, source.read_bytes())
+    status, payload = fetch(base + '/api/jobs')
+    queued = {item['id']: item.get('state') for item in json.loads(payload)} if status == 200 else {}
+    if queued.get(failed_id) != 'queued' or queued.get(valid_id) != 'queued':
+        raise RuntimeError('paused queue started or lost an admitted acceptance job')
+    status, payload = request(base + '/api/queue/control', method='POST',
+                              body=b'{"paused":false}', headers={'Content-Type': 'application/json'})
+    if status != 200 or json.loads(payload).get('paused') is not False:
+        raise RuntimeError('could not resume queue for failed-job recovery acceptance')
+    failed = wait_for_job(base, failed_id, process, timeout)
+    if failed.get('state') != 'failed' or not failed.get('error'):
+        raise RuntimeError(f'invalid video did not fail with an actionable error: {failed}')
+    if fetch(base + f'/api/jobs/{failed_id}/download')[0] != 404:
+        raise RuntimeError('failed job exposed a downloadable partial output')
+    return failed_id, valid_id
+
+
+def group_members(group_id: int) -> list[int]:
+    """Inspect this acceptance process group without relying on a ps command."""
+    members = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            if os.getpgid(int(entry.name)) == group_id:
+                members.append(int(entry.name))
+        except ProcessLookupError:
+            continue
+    return sorted(members)
+
+
+def cancel_active_export(base: str, isolated: Path, source: Path, fields: dict[str, str],
+                         process, timeout: float) -> dict:
+    long_source = isolated / 'cancel-active-export.mp4'
+    result = subprocess.run([shutil.which('ffmpeg'), '-hide_banner', '-loglevel', 'error',
+                             '-stream_loop', '119', '-i', str(source), '-t', '120', '-c', 'copy',
+                             '-y', str(long_source)], capture_output=True, timeout=60)
+    if result.returncode:
+        raise RuntimeError(f'could not create cancellation fixture: {result.stderr[-2000:]!r}')
+    job_id = submit_video_job(base, fields, long_source.name, long_source.read_bytes())
+    running = wait_for_job(base, job_id, process, timeout,
+                           ready=lambda job: job.get('state') == 'processing'
+                           and (job.get('frames_processed') or 0) > 0)
+    status, _ = request(base + f'/api/jobs/{job_id}/cancel', method='POST')
+    if status != 200:
+        raise RuntimeError(f'active cancellation returned HTTP {status}')
+    canceled = wait_for_job(base, job_id, process, timeout)
+    if canceled.get('state') != 'canceled':
+        raise RuntimeError(f'active export did not reach canceled: {canceled}')
+    if fetch(base + f'/api/jobs/{job_id}/download')[0] != 404:
+        raise RuntimeError('canceled job exposed a downloadable partial output')
+    deadline = time.monotonic() + 5
+    while True:
+        survivors = [pid for pid in group_members(process.pid) if pid != process.pid]
+        if not survivors:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f'owned media children survived cancellation: {survivors}')
+        time.sleep(.1)
+    recovery_id = submit_video_job(base, fields, 'after-cancel.mp4', source.read_bytes())
+    recovery = wait_for_job(base, recovery_id, process, timeout)
+    execution = recovery.get('execution', {})
+    if (recovery.get('state') != 'completed' or execution.get('active_provider') != 'CPUExecutionProvider'
+            or execution.get('inference_succeeded') is not True):
+        raise RuntimeError(f'queue failed to recover after active cancellation: {recovery}')
+    if fetch(base + f'/api/jobs/{recovery_id}/download')[0] != 200:
+        raise RuntimeError('post-cancellation successful job has no downloadable output')
+    return {'canceled_job_id': job_id, 'frames_before_cancel': running['frames_processed'],
+            'terminal_state': canceled['state'], 'surviving_media_children': survivors,
+            'recovery_job_id': recovery_id, 'recovery_state': recovery['state']}
+
+
 def run_linux_model_smoke(base: str, isolated: Path, process: subprocess.Popen[bytes],
                           model_timeout: float, job_timeout: float) -> dict:
     """Install the pinned Small model and export a real, generated video on Linux."""
@@ -97,37 +211,14 @@ def run_linux_model_smoke(base: str, isolated: Path, process: subprocess.Popen[b
     if generated.returncode != 0 or not source.is_file() or source.stat().st_size == 0:
         raise RuntimeError(f'could not generate the Linux acceptance video: {generated.stderr[-2000:]}')
 
-    form, boundary = multipart({
+    fields = {
         'layout': 'SBS', 'strength': '7.5', 'convergence': '0.5',
         'depth_mode': model_id, 'input_size': '256', 'resolution': 'source',
         'quality': 'fast', 'temporal_smoothing': '0', 'edge_refinement': 'false',
         'execution_mode': 'cpu', 'purpose': 'export', 'video_decode': 'software',
-    }, source.name, 'video/mp4', source.read_bytes())
-    status, payload = request(base + '/api/jobs', method='POST', body=form,
-                              headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
-                              timeout=30)
-    if status != 200:
-        raise RuntimeError(f'Linux model smoke job was rejected with HTTP {status}: {payload[:1000]!r}')
-    admitted = json.loads(payload)
-    job_id = admitted.get('id')
-    if not isinstance(job_id, str) or not job_id:
-        raise RuntimeError(f'Linux model smoke job has no ID: {admitted}')
-
-    deadline = time.monotonic() + job_timeout
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f'packaged process exited during media conversion ({process.returncode})')
-        status, payload = fetch(base + '/api/jobs')
-        if status != 200:
-            raise RuntimeError(f'job catalog returned HTTP {status} during media conversion')
-        job = next((item for item in json.loads(payload) if item.get('id') == job_id), None)
-        if job is None:
-            raise RuntimeError(f'Linux model smoke job {job_id} disappeared')
-        if job.get('state') in {'completed', 'failed', 'canceled'}:
-            break
-        time.sleep(.5)
-    else:
-        raise TimeoutError(f'Linux model smoke job exceeded {job_timeout:g}s: {job}')
+    }
+    failed_id, job_id = queue_failed_then_valid(base, fields, source, process, job_timeout)
+    job = wait_for_job(base, job_id, process, job_timeout)
     if job.get('state') != 'completed':
         raise RuntimeError(f'Linux model smoke job did not complete: {job}')
     execution = job.get('execution', {})
@@ -164,6 +255,7 @@ def run_linux_model_smoke(base: str, isolated: Path, process: subprocess.Popen[b
                              capture_output=True, text=True, timeout=120)
     if decoded.returncode != 0:
         raise RuntimeError(f'full decode of Linux model smoke output failed: {decoded.stderr[-2000:]}')
+    cancellation = cancel_active_export(base, isolated, source, fields, process, job_timeout)
     return {
         'model_id': model_id, 'model_state': model.get('state'),
         'provider': execution.get('active_provider'), 'inference_succeeded': True,
@@ -171,6 +263,7 @@ def run_linux_model_smoke(base: str, isolated: Path, process: subprocess.Popen[b
         'output_sha256': hashlib.sha256(output).hexdigest(),
         'video': video, 'audio_present': True, 'duration_seconds': duration,
         'full_decode_succeeded': True,
+        'failed_predecessor_job_id': failed_id, 'cancellation': cancellation,
     }
 
 
@@ -258,6 +351,10 @@ def main() -> int:
         parser.error(f"package architecture is not x86_64: {build_report.get('architecture')!r}")
     if not build_report.get('build_fingerprint'):
         parser.error('package build report has no source fingerprint')
+    lock_path = package / 'requirements-linux-lock.txt'
+    if (not lock_path.is_file() or hashlib.sha256(lock_path.read_bytes()).hexdigest()
+            != build_report.get('dependency_lock_sha256')):
+        parser.error('packaged dependency lock does not match the build report')
     if native_report.get('architecture') != 'x86_64' or not native_report.get('elf_count'):
         parser.error('native dependency report does not describe an x86_64 ELF package')
     if native_report.get('missing_dependencies'):
@@ -336,7 +433,7 @@ def main() -> int:
                         raise RuntimeError(f"Linux model catalog contains GPU-specific wording for {model.get('id')}")
                 result['checks'].extend(['http-ui', 'runtime-status', 'cpu-only-capabilities',
                                          'cpu-only-model-catalog', 'build-fingerprint',
-                                         'elf-dependency-report', 'xdg-isolation', 'read-only-install'])
+                                         'elf-dependency-report', 'dependency-lock', 'xdg-isolation', 'read-only-install'])
                 result['build_fingerprint'] = build_report['build_fingerprint']
                 result['output_dir'] = str(output_dir)
                 result['ffmpeg_found'] = state['ffmpeg_found']
@@ -345,7 +442,10 @@ def main() -> int:
                         base, isolated, process, args.model_timeout, args.job_timeout)
                     result['checks'].extend(['pinned-small-model-download-and-inference',
                                              'generated-video-stereo-export',
-                                             'output-audio-frame-count-and-full-decode'])
+                                             'output-audio-frame-count-and-full-decode',
+                                             'failed-job-queue-recovery', 'queue-pause-resume',
+                                             'active-export-cancellation', 'cancellation-child-cleanup',
+                                             'post-cancellation-neural-export'])
                 process.send_signal(signal.SIGTERM)
                 process.wait(timeout=20)
                 assert_clean_shutdown(process.returncode, log_path.read_text(encoding='utf-8', errors='replace'))
@@ -355,11 +455,15 @@ def main() -> int:
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait(timeout=10)
-        result['server_log'] = log_path.read_text(encoding='utf-8', errors='replace')
-        print(json.dumps(result, indent=2, sort_keys=True))
-        if args.report:
-            args.report.parent.mkdir(parents=True, exist_ok=True)
-            args.report.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+            result['server_log'] = log_path.read_text(encoding='utf-8', errors='replace') if log_path.exists() else ''
+            error = sys.exc_info()[1]
+            result['success'] = error is None
+            if error is not None:
+                result['error'] = str(error)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            if args.report:
+                args.report.parent.mkdir(parents=True, exist_ok=True)
+                args.report.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return 0
 
 
