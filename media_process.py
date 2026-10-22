@@ -6,10 +6,12 @@ from functools import lru_cache
 from fractions import Fraction
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -20,6 +22,24 @@ class MediaCancelled(RuntimeError):
 
 class MediaCommandError(RuntimeError):
     """A media command exceeded its time/output budget or returned bad metadata."""
+
+
+def external_process_environment():
+    """Restore system library lookup for external tools in a frozen Linux app.
+
+    PyInstaller prepends its bundled libraries to LD_LIBRARY_PATH. System tools
+    need the pre-launch value, while inference in this process needs the bundle.
+    Return None elsewhere to retain normal subprocess inheritance.
+    """
+    if not sys.platform.startswith('linux') or not getattr(sys, 'frozen', False):
+        return None
+    environment = os.environ.copy()
+    original = environment.get('LD_LIBRARY_PATH_ORIG')
+    if original:
+        environment['LD_LIBRARY_PATH'] = original
+    else:
+        environment.pop('LD_LIBRARY_PATH', None)
+    return environment
 
 
 def stop_media_process(process):
@@ -57,6 +77,7 @@ def run_media_command(command, cancel_event=None, timeout=30, max_output_bytes=1
         raise MediaCancelled('Media command cancelled.')
     process = subprocess.Popen(list(map(str, command)), stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=external_process_environment(),
         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     buffers = [bytearray(), bytearray()]
     overflow = threading.Event()

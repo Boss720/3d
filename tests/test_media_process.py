@@ -1,5 +1,6 @@
 """Probe parsing and actual owned-child cancellation/deadline regressions."""
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -13,6 +14,31 @@ import media_process as media
 
 
 class MediaCommandTests(unittest.TestCase):
+    def test_frozen_linux_child_restores_original_library_path_without_mutating_parent(self):
+        for original in (None, '', '/usr/local/custom/lib'):
+            environment = {'LD_LIBRARY_PATH': '/opt/stereolab/_internal', 'KEEP': 'value'}
+            if original is not None:
+                environment['LD_LIBRARY_PATH_ORIG'] = original
+            with self.subTest(original=original), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(sys, 'platform', 'linux'), patch.object(sys, 'frozen', True, create=True):
+                child = media.external_process_environment()
+                self.assertEqual(child.get('LD_LIBRARY_PATH'), original if original else None)
+                self.assertEqual(child['KEEP'], 'value')
+                self.assertEqual(os.environ['LD_LIBRARY_PATH'], '/opt/stereolab/_internal')
+
+    def test_source_and_windows_children_keep_existing_environment(self):
+        for platform, frozen in (('linux', False), ('win32', True)):
+            with self.subTest(platform=platform), patch.object(sys, 'platform', platform), \
+                    patch.object(sys, 'frozen', frozen, create=True):
+                self.assertIsNone(media.external_process_environment())
+
+    def test_media_command_child_receives_original_library_path(self):
+        with patch.dict(os.environ, {'LD_LIBRARY_PATH': '/bundle', 'LD_LIBRARY_PATH_ORIG': '/system'}), \
+                patch.object(sys, 'platform', 'linux'), patch.object(sys, 'frozen', True, create=True):
+            result = self.run_tracked("import os;print(os.environ.get('LD_LIBRARY_PATH'))")
+            self.assertEqual(result.stdout.strip(), b'/system')
+            self.assertEqual(os.environ['LD_LIBRARY_PATH'], '/bundle')
+
     def run_tracked(self, script, **kwargs):
         children = []
         spawn = subprocess.Popen

@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from media_process import external_process_environment
 
 
 class ClipCancelled(Exception):
@@ -109,6 +110,7 @@ def prepare_preview_clip(ffmpeg, source, destination, start_seconds, duration_se
         deadline = time.monotonic() + timeout
         with tempfile.TemporaryFile(mode='w+b') as errors:
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       env=external_process_environment(),
                                        stderr=errors, shell=False,
                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             if on_process is not None:

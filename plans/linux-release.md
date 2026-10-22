@@ -1,6 +1,6 @@
 # StereoLab Linux release plan
 
-Updated 22 October 2026. Status: implementation and native verification in progress. Branch `codex/linux-cpu-build` contains the Linux CPU build and compatibility fixes through `c33e620`. No Linux archive or packaged inference result has been produced yet.
+Updated 22 October 2026. Status: native packaging succeeded; cross-version runtime qualification is in progress. Branch `codex/linux-cpu-build` contains the Linux CPU build and compatibility fixes. The first archive from `1077d28` exists, but Ubuntu 24.04 packaged media acceptance failed and requires a corrected rebuild.
 
 ## Current implementation snapshot
 
@@ -13,6 +13,8 @@ Review found the verifier looked for `static/index.html` at the package root alt
 Next: push the verifier fix, complete the source matrix, build on Ubuntu 22.04, and verify the checksum-identical archive on both distributions. Preserve unrelated `PROGRESS.md` and output artifacts. Do not publish a GitHub release during this slice; complete artifact notice review and remaining release qualification first.
 
 Native follow-up: run `39793961025` executed the Ubuntu 22.04 source suite and found one remaining fixture failure among 659 tests: FFmpeg 4.4 does not recognize `-display_rotation:v:0`. The fixture now falls back only for that unsupported-option error to the older `rotate=90` metadata mechanism, retaining its display-matrix, dimensions, frame-count and full decode assertions. Windows full suite: 659 tests, 8 skipped; the decoder suite with actual FFmpeg 9.0.2: 25 tests passed, including both generated-media regressions. The legacy fallback still needs its Ubuntu 22.04 rerun.
+
+Run `39794798904` passed both native source suites (659 tests, 6 skips each) and built the CPU archive on Ubuntu 22.04 with Python 3.12.15/glibc 2.35 from a clean `1077d28` checkout. ELF inspection found 184 objects and no missing dependencies. Downloaded archive SHA-256 matches `89182672942d5870a5363bbbacf8dbc4e46c9cd25d029307d32f69156d31a0e4`. Ubuntu 24.04 package acceptance then exposed an inherited-library conflict: system FFprobe loaded the older bundled libstdc++ and lacked GLIBCXX_3.4.32. The follow-up restores LD_LIBRARY_PATH_ORIG (or clears LD_LIBRARY_PATH) only for external child processes in frozen Linux; the parent retains its inference-library environment. This follows PyInstaller's documented external-program environment guidance. The first archive is a diagnostic candidate, not a qualified release.
 
 ## Release scope
 

@@ -57,7 +57,7 @@ from video_depth import VideoDepthEstimator
 from video_decoder import DecoderCancelled, open_video_capture
 from upload_admission import UploadAdmissionMiddleware
 from platform_paths import resolve_paths
-from media_process import fps_passthrough_args
+from media_process import external_process_environment, fps_passthrough_args
 
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -468,6 +468,7 @@ def ffprobe_fps(ffmpeg_path: str, source: Path, fallback: float) -> float:
             capture_output=True,
             text=True,
             timeout=15,
+            env=external_process_environment(),
         )
         streams = json.loads(result.stdout or "{}").get("streams", [])
         if streams:
@@ -874,7 +875,8 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         "-movflags", "+faststart", str(target),
     ]
 
-    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE, env=external_process_environment())
     conversion_start = time.monotonic()
     set_job(job.id, process=proc, encoder=encoder_name, phase="conversion", message="Converting frames locally", video_started_monotonic=conversion_start)
     with JOBS_LOCK:

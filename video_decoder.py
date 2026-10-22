@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from gpu_hardware import probe_hardware
-from media_process import MediaCancelled, fps_passthrough_args, probe_video
+from media_process import MediaCancelled, external_process_environment, fps_passthrough_args, probe_video
 
 
 DecoderCancelled = MediaCancelled
@@ -106,6 +106,7 @@ class D3D11Capture:
                                        self.probe.get('fps_ratio') or str(self.fps))
         self.process = (popen or subprocess.Popen)(self.command, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            env=external_process_environment(),
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         self._threads = []
         try:

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable, Mapping
+from media_process import external_process_environment
 
 
 TEMP_CATEGORIES = frozenset({'uploads', 'previews'})
@@ -147,4 +148,4 @@ def _open_linux_location(path: Path) -> None:
     if not opener:
         raise RuntimeError('Cannot open a folder: install xdg-open or gio and try again.')
     command = [opener, 'open', str(path)] if Path(opener).name == 'gio' else [opener, str(path)]
-    subprocess.Popen(command, shell=False)
+    subprocess.Popen(command, shell=False, env=external_process_environment())

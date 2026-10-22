@@ -8,6 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from media_process import external_process_environment
 
 
 _PROBE_TIMEOUT_SECONDS = 6.0
@@ -93,6 +94,7 @@ def _cached_nvenc_smoke_test(
             capture_output=True,
             text=True,
             timeout=_PROBE_TIMEOUT_SECONDS,
+            env=external_process_environment(),
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as error:

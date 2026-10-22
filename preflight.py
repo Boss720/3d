@@ -12,6 +12,7 @@ from pathlib import Path
 import cv2
 
 from stereo import LAYOUTS, layout_size
+from media_process import external_process_environment
 
 
 MINIMUM_FREE_BYTES = 16 * 1024**2
@@ -27,6 +28,7 @@ def _libx264_available(binary: str, size: int, modified_ns: int) -> bool:
     try:
         result = subprocess.run([binary, '-hide_banner', '-nostdin', '-encoders'],
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                env=external_process_environment(),
                                 timeout=ENCODER_PROBE_TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.SubprocessError):
         raise RuntimeError('FFmpeg encoder check failed or timed out. Install FFmpeg with libx264 support and retry.') from None

@@ -124,7 +124,7 @@ class LocalWorkspaceTests(unittest.TestCase):
                 patch.object(workspace.shutil, 'which', return_value='/usr/bin/xdg-open'), \
                 patch.object(workspace.subprocess, 'Popen') as popen:
             workspace._open_linux_location(folder)
-        popen.assert_called_once_with(['/usr/bin/xdg-open', str(folder)], shell=False)
+        popen.assert_called_once_with(['/usr/bin/xdg-open', str(folder)], shell=False, env=None)
 
     def test_linux_folder_opener_supports_gio_fallback(self):
         folder = self.roots['outputs']
@@ -133,7 +133,7 @@ class LocalWorkspaceTests(unittest.TestCase):
                 patch.object(workspace.shutil, 'which', side_effect=lambda name: '/usr/bin/gio' if name == 'gio' else None), \
                 patch.object(workspace.subprocess, 'Popen') as popen:
             workspace._open_linux_location(folder)
-        popen.assert_called_once_with(['/usr/bin/gio', 'open', str(folder)], shell=False)
+        popen.assert_called_once_with(['/usr/bin/gio', 'open', str(folder)], shell=False, env=None)
 
     def test_linux_folder_opener_reports_headless_or_missing_helper(self):
         folder = self.roots['outputs']
