@@ -12,6 +12,8 @@ Review found the verifier looked for `static/index.html` at the package root alt
 
 Next: push the verifier fix, complete the source matrix, build on Ubuntu 22.04, and verify the checksum-identical archive on both distributions. Preserve unrelated `PROGRESS.md` and output artifacts. Do not publish a GitHub release during this slice; complete artifact notice review and remaining release qualification first.
 
+Native follow-up: run `39793961025` executed the Ubuntu 22.04 source suite and found one remaining fixture failure among 659 tests: FFmpeg 4.4 does not recognize `-display_rotation:v:0`. The fixture now falls back only for that unsupported-option error to the older `rotate=90` metadata mechanism, retaining its display-matrix, dimensions, frame-count and full decode assertions. Windows full suite: 659 tests, 8 skipped; the decoder suite with actual FFmpeg 9.0.2: 25 tests passed, including both generated-media regressions. The legacy fallback still needs its Ubuntu 22.04 rerun.
+
 ## Release scope
 
 Ship a Linux x86-64 CPU beta first, preserving the existing local browser interface, neural models, conversion queue, projects, history and depth cache. Add an optional NVIDIA CUDA edition after the CPU artifact passes release acceptance. Windows remains supported throughout.

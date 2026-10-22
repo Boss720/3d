@@ -429,7 +429,16 @@ class GeneratedMediaTests(unittest.TestCase):
         self.assertEqual(capture.probe['total_frames'], 5)
         # Set the display matrix explicitly; recent FFmpeg versions no longer
         # translate a rotate metadata tag into stream display side data.
-        self.command(['-display_rotation:v:0', '90', '-i', str(source), '-c', 'copy', str(rotated)])
+        result = run_media_command([self.ffmpeg, '-hide_banner', '-loglevel', 'error',
+            '-nostdin', '-y', '-display_rotation:v:0', '90', '-i', str(source),
+            '-c', 'copy', str(rotated)])
+        if result.returncode and b"Unrecognized option 'display_rotation:v:0'" in result.stderr:
+            # FFmpeg 4.4 (Ubuntu 22.04) writes the same display matrix through
+            # output rotation metadata; recent versions need the input option.
+            self.command(['-i', str(source), '-c', 'copy', '-metadata:s:v:0',
+                          'rotate=90', str(rotated)])
+        else:
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
         metadata = probe_video(rotated, self.ffmpeg)
         self.assertEqual(metadata['rotation_degrees'], 90, 'Rotation fixture must carry a display matrix')
         rotated_frames, capture = self.frames(rotated)
