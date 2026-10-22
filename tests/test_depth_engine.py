@@ -49,6 +49,13 @@ class FakeResponse(io.BytesIO):
 
 class EngineTest(unittest.TestCase):
     def setUp(self):
+        # Most preexisting cases exercise the Windows DirectML policy with a
+        # fake runtime. Linux-specific cases opt into Linux explicitly below.
+        # Keep those simulations deterministic when the portable suite runs on
+        # a Linux CI host.
+        self.platform_patch = patch('sys.platform', 'win32')
+        self.platform_patch.start()
+        self.addCleanup(self.platform_patch.stop)
         self.tmp = Path(__file__).resolve().parents[1] / '.runtime' / 'model-tests' / uuid.uuid4().hex
         self.manager = ModelManager(self.tmp)
         self.runtime = patch.object(self.manager, 'runtime_info', return_value={'available': True, 'error': None})

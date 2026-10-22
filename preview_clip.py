@@ -89,7 +89,7 @@ def prepare_preview_clip(ffmpeg, source, destination, start_seconds, duration_se
     # to an even dimension for yuv420p; unusably tiny sources fail in FFmpeg.
     scale = 'min(1,min(960/iw,540/ih))'
     filters = (f"scale=w='trunc(iw*{scale}/2)*2':h='trunc(ih*{scale}/2)*2',"
-               f'fps={fps:.12g}')
+               f'fps={fps:.12g},setpts=PTS-STARTPTS')
     command = [os.fspath(ffmpeg), '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
                '-ss', f'{start:.12g}', '-i', str(source), '-t', f'{duration:.12g}',
                '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn',

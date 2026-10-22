@@ -57,6 +57,7 @@ from video_depth import VideoDepthEstimator
 from video_decoder import DecoderCancelled, open_video_capture
 from upload_admission import UploadAdmissionMiddleware
 from platform_paths import resolve_paths
+from media_process import fps_passthrough_args
 
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -868,7 +869,7 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         "-map", "0:v:0", "-map", "1:a?",
         *encoder_args,
         *timeline_args,
-        "-fps_mode:v", "passthrough",
+        *fps_passthrough_args(ffmpeg, stream='v'),
         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", str(target),
     ]

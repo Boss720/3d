@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from gpu_hardware import probe_hardware
-from media_process import MediaCancelled, probe_video
+from media_process import MediaCancelled, fps_passthrough_args, probe_video
 
 
 DecoderCancelled = MediaCancelled
@@ -64,7 +64,7 @@ def decoder_command(ffmpeg, source, adapter_id=None, fps=None):
     command += ['-i', str(source), '-map', '0:v:0', '-an', '-sn', '-dn']
     if filters:
         command += ['-vf', ','.join(filters)]
-    return command + ['-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'bgr24', 'pipe:1']
+    return command + fps_passthrough_args(ffmpeg) + ['-f', 'rawvideo', '-pix_fmt', 'bgr24', 'pipe:1']
 
 
 class D3D11Capture:

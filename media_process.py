@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from collections import deque
+from functools import lru_cache
 from fractions import Fraction
 import json
 import math
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import threading
@@ -108,6 +110,40 @@ def run_media_command(command, cancel_event=None, timeout=30, max_output_bytes=1
             raise MediaCommandError('Media command cleanup failed: owned process or pipe readers survived the shutdown timeout.')
 
 
+@lru_cache(maxsize=16)
+def _ffmpeg_supports_fps_mode(binary, modified_ns, size):
+    try:
+        result = run_media_command([binary, '-hide_banner', '-h', 'full'], timeout=5,
+                                   max_output_bytes=4 * 1024 * 1024)
+    except Exception:
+        # Capability discovery is advisory; the actual conversion command will
+        # report a clear FFmpeg error if neither passthrough spelling works.
+        return False
+    if result.returncode:
+        return False
+    help_text = result.stdout + b'\n' + result.stderr
+    return re.search(rb'(?m)^\s*-fps_mode(?:\[|:|\s)', help_text) is not None
+
+
+def fps_passthrough_args(ffmpeg_path, stream=None):
+    """Choose the installed FFmpeg's supported passthrough output option."""
+    candidate = Path(ffmpeg_path).expanduser()
+    if not candidate.is_file():
+        located = shutil.which(str(ffmpeg_path))
+        if not located:
+            return ['-vsync', '0']
+        candidate = Path(located)
+    try:
+        candidate = candidate.resolve(strict=True)
+        stat = candidate.stat()
+    except OSError:
+        return ['-vsync', '0']
+    if not _ffmpeg_supports_fps_mode(str(candidate), stat.st_mtime_ns, stat.st_size):
+        return ['-vsync', '0']
+    option = '-fps_mode' if stream is None else f'-fps_mode:{stream}'
+    return [option, 'passthrough']
+
+
 def _number(value, *, positive=False):
     try:
         value = float(value)
@@ -137,9 +173,19 @@ def probe_video(source, ffmpeg, cancel_event=None, timeout=30):
     ffprobe = binary.with_name('ffprobe.exe' if binary.suffix.lower() == '.exe' else 'ffprobe')
     if not ffprobe.is_file():
         raise MediaCommandError('FFprobe is required beside FFmpeg for safe video decoding. Install a complete FFmpeg build.')
-    result = run_media_command([str(ffprobe), '-v', 'error', '-select_streams', 'v:0',
+    command = [str(ffprobe), '-v', 'error', '-select_streams', 'v:0',
         '-show_entries', 'stream=width,height,avg_frame_rate,r_frame_rate,duration,start_time,nb_frames,sample_aspect_ratio,color_range,color_space,color_transfer,color_primaries:stream_tags=rotate:stream_side_data=rotation:format=duration,start_time',
-        '-of', 'json', str(source)], cancel_event=cancel_event, timeout=timeout, max_output_bytes=65536)
+        '-of', 'json', str(source)]
+    result = run_media_command(command, cancel_event=cancel_event, timeout=timeout, max_output_bytes=65536)
+    diagnostic = result.stderr.lower()
+    if result.returncode and b'stream_side_data' in diagnostic and (
+            b'no match for section' in diagnostic or b'invalid argument' in diagnostic):
+        # Ubuntu 22.04's FFprobe does not recognize stream_side_data as a
+        # selectable section. Its normal stream JSON still includes the
+        # bounded side_data_list, so use the default stream/format sections.
+        result = run_media_command([str(ffprobe), '-v', 'error', '-select_streams', 'v:0',
+            '-show_streams', '-show_format', '-of', 'json', str(source)],
+            cancel_event=cancel_event, timeout=timeout, max_output_bytes=65536)
     if result.returncode:
         detail = result.stderr.decode('utf-8', errors='replace').strip()[-2000:]
         raise MediaCommandError(f'Could not probe this video. Re-encode it as H.264 MP4 and retry. {detail}'.strip())

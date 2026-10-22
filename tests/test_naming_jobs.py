@@ -65,7 +65,8 @@ class NamingJobTests(unittest.TestCase):
         self.assertNotIn('output_name_template', public['settings'])
 
     def test_video_depth_options_are_validated_and_frozen_in_settings(self):
-        response = self.submit(depth_interval='2', video_decode='amd')
+        with patch.object(main.sys, 'platform', 'win32'):
+            response = self.submit(depth_interval='2', video_decode='amd')
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['settings']['depth_interval'], 2)
         self.assertEqual(response.json()['settings']['video_decode'], 'amd')

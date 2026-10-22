@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 import video_decoder as decoder
-from media_process import run_media_command, probe_video
+from media_process import run_media_command, probe_video, fps_passthrough_args
 
 
 ADAPTER = {'id': 2, 'name': 'AMD Radeon', 'vendor_id': 0x1002, 'software': False}
@@ -281,7 +281,10 @@ class OwnedSoftwareTests(unittest.TestCase):
             command = decoder.decoder_command('ffmpeg', 'source.mp4', adapter, '30000/1001')
             filters = command[command.index('-vf') + 1]
             self.assertIn('setpts=PTS-STARTPTS,fps=fps=30000/1001:round=near', filters)
-            self.assertEqual(command[command.index('-fps_mode') + 1], 'passthrough')
+            if '-fps_mode' in command:
+                self.assertEqual(command[command.index('-fps_mode') + 1], 'passthrough')
+            else:
+                self.assertEqual(command[command.index('-vsync') + 1], '0')
 
     def capture_child(self, script, *, event=None, timeout=1):
         children = []
@@ -400,7 +403,7 @@ class GeneratedMediaTests(unittest.TestCase):
         self.command(['-f', 'rawvideo', '-pixel_format', 'bgr24', '-video_size', '128x32',
             '-framerate', '20', '-i', str(raw), '-vf',
             r'setpts=if(lt(N\,40)\,N/(10*TB)\,4/TB+(N-40)/(20*TB))+2/TB',
-            '-fps_mode:v', 'vfr', '-frames:v', '120', '-c:v', 'libx264', '-preset', 'ultrafast',
+            *fps_passthrough_args(self.ffmpeg), '-frames:v', '120', '-c:v', 'libx264', '-preset', 'ultrafast',
             '-crf', '0', '-pix_fmt', 'yuv420p', '-avoid_negative_ts', 'disabled', str(source)])
         frames, capture = self.frames(source)
         ordinals = [sum(1 << bit for bit in range(7)

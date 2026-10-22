@@ -5,7 +5,9 @@ import sys
 import threading
 import time
 import unittest
+import uuid
 from unittest.mock import patch
+from pathlib import Path
 
 import media_process as media
 
@@ -61,6 +63,21 @@ class MediaCommandTests(unittest.TestCase):
         with patch.object(media.subprocess, 'Popen') as spawn, self.assertRaises(media.MediaCancelled):
             media.run_media_command(['unused'], cancel_event=event)
         spawn.assert_not_called()
+
+    def test_ffmpeg_passthrough_option_matches_binary_help(self):
+        for help_text, expected in ((b' -fps_mode[:stream_specifier] <mode>', ['-fps_mode', 'passthrough']),
+                                    (b' -vsync <parameter>', ['-vsync', '0'])):
+            with self.subTest(expected=expected):
+                directory = Path(__file__).resolve().parents[1] / '.runtime' / 'ffmpeg-option-tests'
+                directory.mkdir(parents=True, exist_ok=True)
+                binary = directory / f'ffmpeg-{uuid.uuid4().hex}'
+                try:
+                    binary.write_bytes(b'fake executable identity')
+                    result = subprocess.CompletedProcess([], 0, help_text, b'')
+                    with patch.object(media, 'run_media_command', return_value=result):
+                        self.assertEqual(media.fps_passthrough_args(binary), expected)
+                finally:
+                    binary.unlink(missing_ok=True)
 
 
 class ProbeTests(unittest.TestCase):
@@ -122,6 +139,21 @@ class ProbeTests(unittest.TestCase):
                                'side_data_list': [{'rotation': -90}]})
         self.assertEqual((metadata['width'], metadata['height']), (90, 160))
         self.assertEqual(metadata['rotation_degrees'], 270)
+
+    def test_old_ffprobe_falls_back_when_side_data_selector_is_unavailable(self):
+        failed = subprocess.CompletedProcess([], 1, b'', b"No match for section 'stream_side_data'")
+        stream = {'width': 160, 'height': 90, 'avg_frame_rate': '15/1',
+                  'side_data_list': [{'rotation': -90}]}
+        compatible = subprocess.CompletedProcess([], 0, json.dumps({'streams': [stream],
+            'format': {'duration': '8'}}).encode(), b'')
+        with patch.object(media.Path, 'is_file', return_value=True), \
+                patch.object(media, 'run_media_command', side_effect=[failed, compatible]) as run:
+            metadata = media.probe_video('source.mp4', 'ffmpeg', timeout=3)
+
+        self.assertEqual(run.call_count, 2)
+        self.assertIn('stream_side_data', run.call_args_list[0].args[0][run.call_args_list[0].args[0].index('-show_entries') + 1])
+        self.assertIn('-show_streams', run.call_args_list[1].args[0])
+        self.assertEqual((metadata['width'], metadata['height']), (90, 160))
 
     def test_unknown_duration_count_and_bad_rate_are_explicit(self):
         metadata = self.probe({'width': 2, 'height': 1, 'avg_frame_rate': '0/0'},
