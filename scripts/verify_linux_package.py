@@ -197,6 +197,12 @@ def assert_package_read_only(package: Path) -> None:
             raise RuntimeError(f'package path remains writable: {path}')
 
 
+def assert_bundled_ui(package: Path) -> None:
+    # PyInstaller 6 one-directory builds place collected data in _internal.
+    if not (package / '_internal' / 'static' / 'index.html').is_file():
+        raise RuntimeError('bundled _internal/static/index.html is missing')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('package', type=Path, help='extracted PyInstaller StereoLab package directory')
@@ -229,8 +235,10 @@ def main() -> int:
     executable = package / 'StereoLab'
     if not executable.is_file() or not os.access(executable, os.X_OK):
         parser.error(f'package executable is missing or not executable: {executable}')
-    if not (package / 'static' / 'index.html').is_file():
-        parser.error('bundled static/index.html is missing')
+    try:
+        assert_bundled_ui(package)
+    except RuntimeError as exc:
+        parser.error(str(exc))
     if not (package / 'stereolab').is_file():
         parser.error('the stereolab launcher is missing')
     try:

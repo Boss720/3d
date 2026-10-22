@@ -16,6 +16,7 @@ permissions:
 jobs:
   linux-tests:
     name: Tests on ${{ matrix.os }}
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,6 +32,7 @@ jobs:
             requirements.txt
             requirements-test.txt
       - name: Install Linux media and OpenCV libraries
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install --yes ffmpeg language-pack-en libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
@@ -46,6 +48,7 @@ jobs:
 
   linux-package:
     name: Build Linux CPU candidate
+    timeout-minutes: 40
     needs: linux-tests
     runs-on: ubuntu-22.04
     steps:
@@ -56,6 +59,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-linux-build.txt
       - name: Install Linux media and OpenCV libraries
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install --yes ffmpeg language-pack-en libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
@@ -82,6 +86,7 @@ jobs:
 
   linux-package-acceptance:
     name: Test exact archive on ${{ matrix.os }}
+    timeout-minutes: 40
     needs: linux-package
     runs-on: ${{ matrix.os }}
     strategy:
@@ -94,6 +99,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Prepare ONNX Runtime locale
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install --yes ffmpeg language-pack-en

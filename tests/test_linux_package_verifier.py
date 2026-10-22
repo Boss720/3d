@@ -4,15 +4,31 @@ from email.parser import BytesParser
 from pathlib import Path
 import sys
 import unittest
+import uuid
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
-from verify_linux_package import multipart
+from verify_linux_package import multipart, assert_bundled_ui
 
 
 class LinuxPackageVerifierTests(unittest.TestCase):
+    def test_bundled_ui_uses_pyinstaller_internal_directory(self):
+        package = Path(__file__).resolve().parents[1] / '.runtime' / 'linux-verifier-tests' / uuid.uuid4().hex
+        package.mkdir(parents=True)
+        try:
+            static = package / '_internal' / 'static'
+            static.mkdir(parents=True)
+            with self.assertRaisesRegex(RuntimeError, 'index.html'):
+                assert_bundled_ui(package)
+            (static / 'index.html').write_text('StereoLab', encoding='utf-8')
+            assert_bundled_ui(package)
+        finally:
+            quarantine = package.parents[1] / '_quarantine' / 'linux-verifier-tests' / package.name
+            quarantine.parent.mkdir(parents=True, exist_ok=True)
+            package.rename(quarantine)
+
     def test_multipart_upload_preserves_form_fields_and_binary_media(self):
         media = b'\x00\xff\r\n\x80generated-video-bytes'
         body, boundary = multipart({'depth_mode': 'depth-anything-v2-small', 'execution_mode': 'cpu'},
