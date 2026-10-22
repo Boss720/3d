@@ -1,5 +1,6 @@
 """ASGI history integration without inference servers or device access."""
 import hashlib
+from types import SimpleNamespace
 import sqlite3
 import threading
 import unittest
@@ -229,6 +230,31 @@ class HistoryIntegrationTests(unittest.TestCase):
         row = store.list_prior()['items'][0]
         self.assertEqual(row['state'], 'interrupted')
         self.assertFalse(row['output_available'])
+
+    def test_frozen_linux_separate_history_and_output_roots_allow_completion_and_next_job(self):
+        import cv2
+        import numpy as np
+        state_root = self.root / 'xdg-state'
+        payload = cv2.imencode('.png', np.zeros((12, 16, 3), np.uint8))[1].tobytes()
+        with patch.object(main, 'FROZEN', True), patch.object(main.sys, 'platform', 'linux'), \
+                patch.object(main, 'PATHS', SimpleNamespace(history_root=state_root)), \
+                patch.dict('os.environ', {'STEREOLAB_HISTORY_INSTANCE': 'xdg-history'}), \
+                patch.object(main, 'ensure_worker'):
+            with TestClient(main.app, base_url='http://127.0.0.1') as client:
+                response = client.post('/api/jobs', files={'file': ('frame.png', payload, 'image/png')})
+                self.assertEqual(response.status_code, 200, response.text)
+                job = main.JOBS[response.json()['id']]
+                main.JOB_QUEUE.get_nowait()
+                main.process_job(job.id)
+                main.JOB_QUEUE.task_done()
+                self.assertEqual(job.state, 'completed', job.error)
+                self.assertIsNone(job.history_warning)
+                self.assertEqual(main.HISTORY.status()['state'], 'ready')
+                next_job = client.post('/api/jobs', files={'file': ('next.png', payload, 'image/png')})
+                self.assertEqual(next_job.status_code, 200, next_job.text)
+        with HistoryStore(state_root, 'xdg-history', outputs_root=self.outputs) as reopened:
+            rows = {row['job_id']: row for row in reopened.list_prior()['items']}
+            self.assertTrue(rows[job.id]['output_available'])
 
     def test_shutdown_holds_lease_until_active_writer_exits_and_keeps_pending(self):
         entered, cancelled, release = threading.Event(), threading.Event(), threading.Event()

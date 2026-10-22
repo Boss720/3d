@@ -129,6 +129,13 @@ def group_members(group_id: int) -> list[int]:
     return sorted(members)
 
 
+def assert_history_ready(base: str) -> None:
+    status, payload = fetch(base + '/api/status')
+    history = json.loads(payload).get('history_capabilities', {}) if status == 200 else {}
+    if history.get('enabled') is not True or history.get('state') != 'ready':
+        raise RuntimeError(f'history degraded after a job boundary: {history}')
+
+
 def cancel_active_export(base: str, isolated: Path, source: Path, fields: dict[str, str],
                          process, timeout: float) -> dict:
     long_source = isolated / 'cancel-active-export.mp4'
@@ -165,6 +172,7 @@ def cancel_active_export(base: str, isolated: Path, source: Path, fields: dict[s
         raise RuntimeError(f'queue failed to recover after active cancellation: {recovery}')
     if fetch(base + f'/api/jobs/{recovery_id}/download')[0] != 200:
         raise RuntimeError('post-cancellation successful job has no downloadable output')
+    assert_history_ready(base)
     return {'canceled_job_id': job_id, 'frames_before_cancel': running['frames_processed'],
             'terminal_state': canceled['state'], 'surviving_media_children': survivors,
             'recovery_job_id': recovery_id, 'recovery_state': recovery['state']}
@@ -255,6 +263,7 @@ def run_linux_model_smoke(base: str, isolated: Path, process: subprocess.Popen[b
                              capture_output=True, text=True, timeout=120)
     if decoded.returncode != 0:
         raise RuntimeError(f'full decode of Linux model smoke output failed: {decoded.stderr[-2000:]}')
+    assert_history_ready(base)
     cancellation = cancel_active_export(base, isolated, source, fields, process, job_timeout)
     return {
         'model_id': model_id, 'model_state': model.get('state'),
@@ -345,6 +354,7 @@ def main() -> int:
     try:
         build_report = json.loads((package / 'build-report.json').read_text(encoding='utf-8'))
         native_report = json.loads((package / 'native-dependencies.json').read_text(encoding='utf-8'))
+        notice_report = json.loads((package / 'native-notices' / 'NATIVE_NOTICES.json').read_text(encoding='utf-8'))
     except (OSError, ValueError) as exc:
         parser.error(f'package build or native-dependency report is missing or invalid: {exc}')
     if build_report.get('architecture') != 'x86_64':
@@ -359,6 +369,9 @@ def main() -> int:
         parser.error('native dependency report does not describe an x86_64 ELF package')
     if native_report.get('missing_dependencies'):
         parser.error(f"package has unresolved ELF dependencies: {native_report['missing_dependencies']}")
+    if (notice_report.get('elf_count') != native_report.get('elf_count')
+            or not notice_report.get('packages')):
+        parser.error('native notice inventory does not cover the scanned ELF files or has no system package provenance')
 
     with tempfile.TemporaryDirectory(prefix='stereolab-linux-acceptance-') as temporary:
         isolated = Path(temporary)
@@ -433,10 +446,18 @@ def main() -> int:
                         raise RuntimeError(f"Linux model catalog contains GPU-specific wording for {model.get('id')}")
                 result['checks'].extend(['http-ui', 'runtime-status', 'cpu-only-capabilities',
                                          'cpu-only-model-catalog', 'build-fingerprint',
-                                         'elf-dependency-report', 'dependency-lock', 'xdg-isolation', 'read-only-install'])
+                                         'elf-dependency-report', 'native-notice-inventory',
+                                         'dependency-lock', 'xdg-isolation', 'read-only-install'])
                 result['build_fingerprint'] = build_report['build_fingerprint']
                 result['output_dir'] = str(output_dir)
                 result['ffmpeg_found'] = state['ffmpeg_found']
+                result['native_notice_inventory'] = {
+                    'elf_count': notice_report['elf_count'],
+                    'system_package_count': len(notice_report['packages']),
+                    'unmapped_elf_count': sum(row.get('ownership_status') == 'unmapped'
+                                              for row in notice_report.get('files', [])),
+                    'errors': notice_report.get('errors', []),
+                }
                 if args.model_smoke:
                     result['model_smoke'] = run_linux_model_smoke(
                         base, isolated, process, args.model_timeout, args.job_timeout)

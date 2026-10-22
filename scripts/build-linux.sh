@@ -86,6 +86,11 @@ PY
 cp "$ROOT/requirements-linux-lock.txt" "$PACKAGE/requirements-linux-lock.txt"
 "$BUILD_PYTHON" scripts/verify_linux_elf.py "$PACKAGE" --report "$PACKAGE/native-dependencies.json"
 "$BUILD_PYTHON" scripts/collect_linux_notices.py --output "$PACKAGE/third-party-notices"
+NATIVE_NOTICES="$(mktemp -d "$BUILD_ROOT/native-notices.XXXXXX")"
+"$BUILD_PYTHON" scripts/collect_linux_native_notices.py \
+    --origins "$PACKAGE/_internal/native-origins.json" \
+    --package "$PACKAGE" --output "$NATIVE_NOTICES"
+cp -a "$NATIVE_NOTICES" "$PACKAGE/native-notices"
 
 mkdir -p "$RELEASE"
 ARCHIVE="$RELEASE/StereoLab-$VERSION-linux-x86_64-cpu.tar.gz"

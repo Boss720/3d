@@ -1242,7 +1242,7 @@ def ensure_worker() -> None:
 
 def history_capabilities() -> dict[str, Any]:
     history_root = PATHS.history_root if FROZEN and sys.platform.startswith("linux") else DATA_ROOT
-    result = (HISTORY or HistoryStore(history_root)).status()
+    result = (HISTORY or HistoryStore(history_root, outputs_root=OUTPUTS)).status()
     if HISTORY_WARNING and result['enabled']:
         result.update(state='degraded', warning=HISTORY_WARNING)
     return result
@@ -1285,7 +1285,7 @@ async def application_lifespan(app):
     global HISTORY, HISTORY_WARNING, ACCEPTING_MUTATIONS, WORKER
     # Configuration and lease acquisition precede worker creation or serving.
     history_root = PATHS.history_root if FROZEN and sys.platform.startswith("linux") else DATA_ROOT
-    store = HistoryStore.from_environment(history_root)
+    store = HistoryStore.from_environment(history_root, outputs_root=OUTPUTS)
     store.open()
     HISTORY, HISTORY_WARNING = store, None
     ACCEPTING_MUTATIONS = True

@@ -35,6 +35,15 @@ a = Analysis(
     noarchive=False,
     optimize=1,
 )
+# Preserve PyInstaller's actual source mapping before collection. This binds
+# system copyright evidence to copied files without guessing from SONAMEs.
+origins_path = Path(CONF['workpath']) / 'native-origins.json'
+origins_path.write_text(json.dumps({
+    'schema_version': 1,
+    'files': [{'destination': destination, 'source': str(Path(source).absolute()), 'kind': kind}
+              for destination, source, kind in a.binaries if kind in {'BINARY', 'EXTENSION'}],
+}, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+a.datas.append(('native-origins.json', str(origins_path), 'DATA'))
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,

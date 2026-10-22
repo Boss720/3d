@@ -185,7 +185,7 @@ class HistoryConflict(HistoryError):
 
 class HistoryStore:
     def __init__(self, data_root, instance_name=None, *, max_records=1000,
-                 max_age_seconds=90 * 86400, clock=None):
+                 max_age_seconds=90 * 86400, clock=None, outputs_root=None):
         if instance_name is not None and instance_name != '' and (type(instance_name) is not str or
                 re.fullmatch('[a-z0-9][a-z0-9_-]{0,31}', instance_name) is None):
             raise ValueError('History instance must be a lowercase ASCII slug of 1 to 32 characters.')
@@ -195,6 +195,9 @@ class HistoryStore:
         if max_age_seconds <= 0:
             raise ValueError('History age limit must be positive.')
         self.data_root = Path(data_root).resolve()
+        # Packaged Linux stores history in XDG state and exports in XDG data.
+        # Retain the lexical path so _output_path still rejects symlink roots.
+        self.outputs_root = Path(outputs_root).absolute() if outputs_root is not None else self.data_root / 'outputs'
         self.instance_name = instance_name or None
         self.enabled = self.instance_name is not None
         self.directory = (self.data_root / '.runtime' / 'history' / f'instance-{self.instance_name}') if self.enabled else None
@@ -510,7 +513,7 @@ class HistoryStore:
     def _output_path(self, record):
         if record['state'] != 'completed':
             return None
-        directory = self.data_root / 'outputs'
+        directory = self.outputs_root
         path = directory / record['output']['name']
         try:
             if directory.resolve() != directory.absolute():
