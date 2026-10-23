@@ -48,6 +48,35 @@ RUNTIME_CAPABILITIES = {
     'directml_graph_transform_version': 'directml-linear-resize-v1',
     'fp16_small_model': True, 'native_depth_output': True,
 }
+_CUDA_DLL_DIRECTORY_HANDLES = []
+
+
+def _preload_cuda_runtime(ort: Any) -> None:
+    """Load pip-provided CUDA/cuDNN DLLs, including from a frozen bundle."""
+    frozen = bool(getattr(sys, 'frozen', False))
+    if frozen:
+        bundle_root = Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent))
+        bundle_root_text = str(bundle_root)
+        if bundle_root_text not in sys.path:
+            sys.path.insert(0, bundle_root_text)
+        dll_directories = sorted(path for path in (bundle_root / 'nvidia').glob('*/bin') if path.is_dir())
+        if not dll_directories:
+            raise RuntimeError('The CUDA build is missing its bundled NVIDIA CUDA/cuDNN DLL directories.')
+        # cuDNN 9 loads split engine plugins by name at inference time. Its
+        # loader does not consistently honor AddDllDirectory, so expose the
+        # bundled package directories through the process DLL search path too.
+        existing_path = os.environ.get('PATH', '')
+        path_entries = existing_path.split(os.pathsep) if existing_path else []
+        new_directories = [str(path) for path in dll_directories
+                           if str(path).casefold() not in {entry.casefold() for entry in path_entries}]
+        if new_directories:
+            os.environ['PATH'] = os.pathsep.join([*new_directories, existing_path] if existing_path else new_directories)
+        if hasattr(os, 'add_dll_directory'):
+            _CUDA_DLL_DIRECTORY_HANDLES.extend(os.add_dll_directory(str(path)) for path in dll_directories)
+    if hasattr(ort, 'preload_dlls'):
+        # An empty directory asks ONNX Runtime to find CUDA/cuDNN in NVIDIA
+        # site-packages; in a one-file build _MEIPASS contains that same layout.
+        ort.preload_dlls(directory='' if frozen else None)
 
 
 MODEL_SPECS = {
@@ -472,8 +501,8 @@ class ModelManager:
         if provider in {GPU_PROVIDER, CUDA_PROVIDER}:
             options.enable_mem_pattern = False
             options.enable_cpu_mem_arena = False
-            if provider == CUDA_PROVIDER and hasattr(ort, 'preload_dlls'):
-                ort.preload_dlls()
+            if provider == CUDA_PROVIDER:
+                _preload_cuda_runtime(ort)
             providers = [(provider, {'device_id': int(device_id)}), CPU_PROVIDER]
         else:
             providers = [CPU_PROVIDER]

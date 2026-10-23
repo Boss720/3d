@@ -80,6 +80,14 @@ switch driver modes and CUDA inference does not require TCC. Confirm the mode wi
 `nvidia-smi`; StereoLab only marks GPU execution verified after a named-model inference
 succeeds.
 
+The CUDA runtime can also be packaged as a separate Windows executable and installer:
+run `setup-cuda.ps1`, then `build-cuda-exe.ps1`, and optionally
+`build-cuda-installer.ps1`. The CUDA build is written under
+`.runtime/windows-cuda/`; it bundles the pip-provided NVIDIA CUDA/cuDNN runtime DLLs
+and installs side by side with the DirectML edition. The normal `build-exe.ps1` and
+`build-installer.ps1` continue to produce the DirectML edition. V100 hardware inference
+must be verified on the target machine before relying on that device path.
+
 Processing device choices:
 
 - **Auto** prefers CUDA, then DirectML on Windows, and uses CPU if neither GPU

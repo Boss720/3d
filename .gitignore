@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .venv-gpu/
+.venv-cuda/
 venv/
 *.onnx
 build/

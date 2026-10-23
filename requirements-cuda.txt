@@ -7,4 +7,6 @@ python-multipart>=0.0.20,<1
 numpy>=1.26,<3
 opencv-python>=4.10,<6
 onnxruntime-gpu[cuda,cudnn]==1.24.4
+# cuDNN 9.27 regresses some SM 7.5 convolution plans; keep the known-good 9.26 line.
+nvidia-cudnn-cu12==9.26.1.1
 onnx>=1.17,<2
