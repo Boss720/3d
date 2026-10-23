@@ -12,7 +12,7 @@ SETTINGS_FIELDS = ('layout', 'strength', 'convergence', 'depth_mode', 'input_siz
                    'quality', 'invert_depth', 'temporal_smoothing', 'edge_refinement', 'execution_mode', 'depth_interval', 'video_decode', 'use_depth_cache')
 _ENUMS = {'layout': set(LAYOUTS), 'depth_mode': {'balanced', 'precision'} | set(MODEL_SPECS),
           'resolution': {'source', '1080p'}, 'quality': {'fast', 'balanced', 'high'},
-          'execution_mode': {'auto', 'cpu', 'gpu', 'hybrid'}, 'video_decode': {'software', 'amd'}}
+          'execution_mode': {'auto', 'cpu', 'gpu', 'cuda', 'hybrid'}, 'video_decode': {'software', 'amd'}}
 _RANGES = {'strength': (0, 10), 'convergence': (0, 1), 'temporal_smoothing': (0, .9)}
 
 

@@ -26,12 +26,13 @@ from urllib.parse import urlsplit
 import cv2
 import numpy as np
 
-from gpu_hardware import probe_hardware
+from gpu_hardware import probe_cuda_devices, probe_hardware
 
 
 CPU_PROVIDER = 'CPUExecutionProvider'
 GPU_PROVIDER = 'DmlExecutionProvider'
-EXECUTION_MODES = ('auto', 'cpu', 'gpu', 'hybrid')
+CUDA_PROVIDER = 'CUDAExecutionProvider'
+EXECUTION_MODES = ('auto', 'cpu', 'gpu', 'cuda', 'hybrid')
 GPU_MAX_INPUT_DIMENSION = 924
 LARGE_4GB_GPU_MAX_INPUT_DIMENSION = 518
 LIMITED_GPU_MEMORY_MB = 4096
@@ -146,6 +147,9 @@ class ModelManager:
     def runtime_info(self) -> dict[str, Any]:
         windows = sys.platform == 'win32'
         hardware = probe_hardware() if windows else {'selected_adapter': None, 'adapters': [], 'error': None}
+        cuda_hardware = probe_cuda_devices()
+        cuda_device = (next((item for item in cuda_hardware['devices'] if 'v100' in item['name'].lower()), None)
+                       or max(cuda_hardware['devices'], key=lambda item: item.get('memory_mb', 0), default=None))
         adapter = hardware['selected_adapter']
         last = self.execution_info()
         capabilities = dict(RUNTIME_CAPABILITIES)
@@ -157,7 +161,7 @@ class ModelManager:
                 'gpu_retry_supported': False, 'directml_static_input_dimensions': False,
                 'directml_resize_policy': None, 'directml_graph_transform_version': None,
             })
-        supported_modes = list(EXECUTION_MODES) if windows else ['auto', 'cpu']
+        supported_modes = ['auto', 'cpu']
         cpu_gpu_error = ('Linux builds currently support CPU inference only. Choose CPU or Auto.' if sys.platform.startswith('linux')
                          else 'This platform currently supports CPU inference only. Choose CPU or Auto.')
         try:
@@ -165,6 +169,13 @@ class ModelManager:
             providers = ort.get_available_providers()
             available = CPU_PROVIDER in providers
             gpu_available = windows and GPU_PROVIDER in providers and adapter is not None
+            cuda_available = CUDA_PROVIDER in providers and cuda_device is not None
+            if gpu_available:
+                supported_modes.extend(['gpu', 'hybrid'])
+            if cuda_available:
+                supported_modes.append('cuda')
+                if 'hybrid' not in supported_modes:
+                    supported_modes.append('hybrid')
             gpu_error = (cpu_gpu_error if not windows else None if gpu_available else hardware['error'] or
                          ('No physical DXGI graphics adapter was found.' if adapter is None else
                           'DirectML is unavailable in this ONNX Runtime. Use the GPU launcher/runtime.'))
@@ -173,6 +184,9 @@ class ModelManager:
                     'error': None if available else 'CPUExecutionProvider is unavailable.',
                     'gpu_available': gpu_available, 'gpu_verified': self._gpu_verified,
                     'gpu_name': adapter['name'] if adapter else None, 'gpu_device': copy.deepcopy(adapter),
+                    'cuda_available': cuda_available, 'cuda_device': copy.deepcopy(cuda_device),
+                    'cuda_devices': copy.deepcopy(cuda_hardware['devices']),
+                    'cuda_error': None if cuda_available else cuda_hardware['error'] or 'CUDAExecutionProvider is unavailable in this ONNX Runtime.',
                     'gpu_error': gpu_error, 'adapters': copy.deepcopy(hardware['adapters']),
                     'last_execution': last,
                     'capabilities': capabilities, 'supported_execution_modes': supported_modes,
@@ -183,6 +197,8 @@ class ModelManager:
                     'device': last['device'], 'version': None, 'error': str(exc),
                     'gpu_available': False, 'gpu_verified': self._gpu_verified,
                     'gpu_name': adapter['name'] if adapter else None, 'gpu_device': copy.deepcopy(adapter),
+                    'cuda_available': False, 'cuda_device': copy.deepcopy(cuda_device),
+                    'cuda_devices': copy.deepcopy(cuda_hardware['devices']), 'cuda_error': str(exc),
                     'gpu_error': str(exc) if windows else cpu_gpu_error,
                     'adapters': copy.deepcopy(hardware['adapters']), 'last_execution': last,
                     'capabilities': capabilities, 'supported_execution_modes': supported_modes}
@@ -206,13 +222,22 @@ class ModelManager:
 
     def _execution_plan(self, model_id: str, execution_mode: str, runtime: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
         if execution_mode not in EXECUTION_MODES:
-            raise ValueError(f'Unknown execution mode: {execution_mode}. Choose auto, cpu, gpu or hybrid.')
+            raise ValueError(f'Unknown execution mode: {execution_mode}. Choose auto, cpu, gpu, cuda or hybrid.')
         if execution_mode == 'cpu':
             return CPU_PROVIDER, None, None
+        if execution_mode == 'auto' and runtime.get('cuda_available'):
+            return CUDA_PROVIDER, runtime.get('cuda_device') or {'id': 0, 'name': 'NVIDIA CUDA device'}, None
+        if execution_mode == 'cuda':
+            if runtime.get('cuda_available'):
+                return CUDA_PROVIDER, runtime.get('cuda_device') or {'id': 0, 'name': 'NVIDIA CUDA device'}, None
+            raise RuntimeError(runtime.get('cuda_error') or 'CUDA Execution Provider is unavailable.')
+        if execution_mode == 'hybrid' and runtime.get('cuda_available'):
+            return CUDA_PROVIDER, runtime.get('cuda_device') or {'id': 0, 'name': 'NVIDIA CUDA device'}, None
         if execution_mode == 'auto' and sys.platform != 'win32':
-            # CPU is the normal Auto choice on platforms without a qualified
-            # GPU backend, not a fallback from a failed GPU attempt.
+            # Linux Auto uses CUDA when installed and otherwise remains CPU-only.
             return CPU_PROVIDER, None, None
+        if execution_mode == 'auto' and not runtime.get('gpu_available'):
+            return CPU_PROVIDER, None, runtime.get('gpu_error') or 'No CUDA or DirectML GPU backend is available; using CPU.'
         adapter = runtime.get('gpu_device')
         reason = None
         requires_nvidia = execution_mode in {'gpu', 'hybrid'}
@@ -250,10 +275,10 @@ class ModelManager:
         while len(self._gpu_failures) > MAX_GPU_FAILURE_ENTRIES:
             self._gpu_failures.pop(next(iter(self._gpu_failures)))
 
-    def _gpu_failure_key(self, model_id: str, adapter: dict[str, Any] | None,
+    def _gpu_failure_key(self, model_id: str, provider: str, adapter: dict[str, Any] | None,
                          input_size: int, frame: np.ndarray) -> tuple[Any, ...]:
-        # DXGI ordinal alone can refer to a different physical adapter later.
-        return (model_id, self._spec(model_id)['sha256'], GPU_PROVIDER,
+        # Device ordinals can refer to a different physical adapter later.
+        return (model_id, self._spec(model_id)['sha256'], provider,
                 json.dumps(adapter, sort_keys=True, default=str), input_size,
                 tuple(frame.shape[:2]), self._gpu_input_limit(model_id, adapter))
 
@@ -294,7 +319,7 @@ class ModelManager:
     def validate(self, model_id: str, execution_mode: str = 'auto') -> None:
         self._spec(model_id)
         if execution_mode not in EXECUTION_MODES:
-            raise ValueError(f'Unknown execution mode: {execution_mode}. Choose auto, cpu, gpu or hybrid.')
+            raise ValueError(f'Unknown execution mode: {execution_mode}. Choose auto, cpu, gpu, cuda or hybrid.')
         runtime = self.runtime_info()
         if not runtime["available"]:
             raise RuntimeError(runtime["error"])
@@ -444,10 +469,12 @@ class ModelManager:
                                             else ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
         for name, value in (input_dimensions or {}).items():
             options.add_free_dimension_override_by_name(name, value)
-        if provider == GPU_PROVIDER:
+        if provider in {GPU_PROVIDER, CUDA_PROVIDER}:
             options.enable_mem_pattern = False
             options.enable_cpu_mem_arena = False
-            providers = [(GPU_PROVIDER, {'device_id': int(device_id)}), CPU_PROVIDER]
+            if provider == CUDA_PROVIDER and hasattr(ort, 'preload_dlls'):
+                ort.preload_dlls()
+            providers = [(provider, {'device_id': int(device_id)}), CPU_PROVIDER]
         else:
             providers = [CPU_PROVIDER]
         session = ort.InferenceSession(str(path), sess_options=options, providers=providers)
@@ -526,10 +553,15 @@ class ModelManager:
             raise ValueError("Depth inference needs a nonempty uint8 BGR image.")
         with self._inference_lock:
             provider, adapter, reason = self._execution_plan(model_id, execution_mode, self.runtime_info())
-            gpu_key = self._gpu_failure_key(model_id, adapter, input_size, frame_bgr)
+            gpu_key = self._gpu_failure_key(model_id, provider, adapter, input_size, frame_bgr)
             self._prune_gpu_failures()
-            if provider == GPU_PROVIDER and execution_mode == 'auto' and gpu_key in self._gpu_failures:
-                provider, adapter, reason = CPU_PROVIDER, None, self._gpu_failures[gpu_key][1]
+            if provider in {GPU_PROVIDER, CUDA_PROVIDER} and execution_mode == 'auto' and gpu_key in self._gpu_failures:
+                reason = self._gpu_failures[gpu_key][1]
+                retry_runtime = self.runtime_info()
+                if provider == CUDA_PROVIDER and retry_runtime.get('gpu_available'):
+                    provider, adapter = GPU_PROVIDER, retry_runtime.get('gpu_device')
+                else:
+                    provider, adapter = CPU_PROVIDER, None
             with self._lock:
                 self._last_execution = {'requested_mode': execution_mode, 'model_id': model_id,
                                         'active_provider': None, 'device': None,
@@ -544,9 +576,9 @@ class ModelManager:
                 try:
                     depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
                 except Exception as exc:
-                    if provider != GPU_PROVIDER:
+                    if provider not in {GPU_PROVIDER, CUDA_PROVIDER}:
                         raise
-                    reason = f'GPU DirectML inference failed: {exc}'
+                    reason = f'{provider} inference failed: {exc}'
                     self._gpu_failures.pop(gpu_key, None)
                     self._gpu_failures[gpu_key] = (time.monotonic() + GPU_FAILURE_COOLDOWN_SECONDS, reason)
                     self._prune_gpu_failures()
@@ -555,21 +587,31 @@ class ModelManager:
                     self._session_id = None
                     with self._lock:
                         self._last_execution['fallback_reason'] = reason
-                    if execution_mode in {'gpu', 'hybrid'}:
+                    if execution_mode in {'gpu', 'cuda', 'hybrid'}:
                         raise RuntimeError(reason) from exc
-                    provider, adapter = CPU_PROVIDER, None
-                    depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
-                if provider == GPU_PROVIDER:
+                    retry_runtime = self.runtime_info()
+                    if provider == CUDA_PROVIDER and retry_runtime.get('gpu_available'):
+                        provider, adapter = GPU_PROVIDER, retry_runtime.get('gpu_device')
+                        try:
+                            depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
+                        except Exception as dml_exc:
+                            reason += f'; DirectML fallback failed: {dml_exc}'
+                            provider, adapter = CPU_PROVIDER, None
+                            depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
+                    else:
+                        provider, adapter = CPU_PROVIDER, None
+                        depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
+                if provider in {GPU_PROVIDER, CUDA_PROVIDER}:
                     self._gpu_verified = True
                     self._gpu_failures.pop(gpu_key, None)
                 with self._lock:
                     self._last_execution.update({
                         'active_provider': provider, 'device': adapter['name'] if adapter else 'CPU',
                         'device_id': adapter['id'] if adapter else None, 'fallback_reason': reason,
-                        'gpu_verified': provider == GPU_PROVIDER,
+                        'gpu_verified': provider in {GPU_PROVIDER, CUDA_PROVIDER},
                         'inference_succeeded': True, 'output_width': depth.shape[1], 'output_height': depth.shape[0],
-                        'cpu_nodes_possible': provider == GPU_PROVIDER,
-                        'input_size_limit': self._gpu_input_limit(model_id, adapter) if provider == GPU_PROVIDER else None,
+                        'cpu_nodes_possible': provider in {GPU_PROVIDER, CUDA_PROVIDER},
+                        'input_size_limit': self._gpu_input_limit(model_id, adapter) if provider in {GPU_PROVIDER, CUDA_PROVIDER} else None,
                     })
                 return depth
             except Exception as exc:
@@ -654,7 +696,7 @@ class ModelManager:
                                                   else self._new_session(self._path(model_id))))
                 if hasattr(self._session, 'disable_fallback'):
                     self._session.disable_fallback()
-                if provider == GPU_PROVIDER and provider not in self._session.get_providers():
+                if provider in {GPU_PROVIDER, CUDA_PROVIDER} and provider not in self._session.get_providers():
                     self._session = None
                     raise RuntimeError(f'{provider} is absent from the created session; ONNX Runtime silently fell back to CPU.')
                 self._session_id = model_id
@@ -676,6 +718,6 @@ class ModelManager:
         finally:
             with self._lock:
                 self._last_execution['inference_pipeline_seconds'] = max(0.0, time.perf_counter() - inference_started)
-        if provider == GPU_PROVIDER and provider not in self._session.get_providers():
+        if provider in {GPU_PROVIDER, CUDA_PROVIDER} and provider not in self._session.get_providers():
             raise RuntimeError(f'{provider} is no longer active after inference.')
         return result

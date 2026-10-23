@@ -49,9 +49,9 @@ To build from source, developers can run:
 
 Building the installer also requires Inno Setup 6. For current test coverage and known limits, see [RELEASE_READINESS.md](RELEASE_READINESS.md).
 
-## Linux CPU build
+## Linux build
 
-A native Linux x86-64 CPU package can be built on Ubuntu 22.04 to retain the intended glibc baseline. CI uses Python 3.12.15 and the exact dependency set in `requirements-linux-lock.txt`. Install Python, FFmpeg, and the system OpenCV libraries, then run `bash ./scripts/build-linux.sh`. The archive, dependency lock and checksum are written under `.runtime/linux-build/`. The candidate from `b26db2d` passed packaged launch, named-model CPU inference and generated audio/video conversion on Ubuntu 22.04 and 24.04. See [LINUX.md](LINUX.md) for launch instructions, storage paths and qualification limits. Linux GPU inference is not included. The published GitHub release currently contains Windows downloads only.
+A native Linux x86-64 CPU package can be built on Ubuntu 22.04 to retain the intended glibc baseline. CI uses Python 3.12.15 and the exact dependency set in `requirements-linux-lock.txt`. Install Python, FFmpeg, and the system OpenCV libraries, then run `bash ./scripts/build-linux.sh`. The archive, dependency lock and checksum are written under `.runtime/linux-build/`. The candidate from `b26db2d` passed packaged launch, named-model CPU inference and generated audio/video conversion on Ubuntu 22.04 and 24.04. See [LINUX.md](LINUX.md) for launch instructions, storage paths and qualification limits. Optional CUDA inference is available to source environments with `onnxruntime-gpu` and an NVIDIA driver; the Linux release package remains CPU-only. The published GitHub release currently contains Windows downloads only.
 
 ## NVIDIA GTX GPU and CPU cooperation
 
@@ -67,31 +67,43 @@ To use the GPU environment on the currently open port explicitly:
 ```
 
 The GTX 1650 Ti works through DirectML/DirectX 12; RTX hardware, TensorRT and a CUDA
-toolkit are not required. DXGI enumeration selects the actual NVIDIA adapter: this
-machine has AMD graphics at index 0 and the GTX at index 1. ONNX Runtime's registered
-provider is a capability signal; the UI reports verified inference separately.
+toolkit are not required for that path. DXGI enumeration selects the actual NVIDIA
+adapter: this machine has AMD graphics at index 0 and the GTX at index 1. ONNX
+Runtime's registered provider is a capability signal; the UI reports verified
+inference separately.
+
+For Tesla V100 or other supported NVIDIA CUDA hardware, run `setup-cuda.ps1` and
+start with `run-cuda.ps1`. This keeps `onnxruntime-gpu` and its CUDA/cuDNN DLLs in a separate `.venv-cuda`
+environment. Select **NVIDIA CUDA** for strict CUDA inference, or **Auto** to prefer
+CUDA when available. V100 may run with the NVIDIA TCC driver model; StereoLab does not
+switch driver modes and CUDA inference does not require TCC. Confirm the mode with
+`nvidia-smi`; StereoLab only marks GPU execution verified after a named-model inference
+succeeds.
 
 Processing device choices:
 
-- **Auto** uses GPU depth if usable and overlaps the CPU video stages. If the GPU
-  cannot run the model, it uses CPU depth and reports the reason.
-- **GPU + CPU / hybrid** requires the NVIDIA DirectML adapter for neural depth:
+- **Auto** prefers CUDA, then DirectML on Windows, and uses CPU if neither GPU
+  provider can run the model. It reports the selected provider and fallback reason.
+- **GPU + CPU / hybrid** uses CUDA when available, otherwise the NVIDIA DirectML
+  adapter for neural depth:
   software decode/resize (or optional AMD decode), NVIDIA inference, then CPU refinement, temporal filtering, stereo
   rendering and FFmpeg encoding. Two bounded queues preserve frame order. GPU failures
   are reported instead of silently switching neural inference to CPU.
-- **NVIDIA GPU** also requires the NVIDIA adapter and reports depth-inference failures.
-  The remaining processing is CPU, sequential around inference. Unsupported ONNX
-  operators may still run on CPU within the GPU session.
+- **NVIDIA CUDA** requires the CUDA provider and an NVIDIA device and reports
+  depth-inference failures. **NVIDIA GPU · DirectML** requires a DirectML adapter.
+  Both report failures rather than silently switching neural inference to CPU. The
+  remaining processing is CPU, sequential around inference. Unsupported ONNX operators
+  may still run on CPU within the GPU session.
 - **CPU only** uses CPU for depth inference and media processing. Video encoding may
   still use NVIDIA NVENC when the local FFmpeg check succeeds.
 
 Only one model/session is resident in each server, with a single inference call at
-a time. All built-in named models can attempt DirectML, including Large on a 4 GB
+a time. All built-in named models can attempt DirectML or CUDA, including Large on a 4 GB
 card. GPU input dimensions are normally capped at 924 pixels on the longer side;
 Large is capped at 518 pixels on adapters with 4 GB or less to reduce its activation
 memory. Start Large at 256 px neural detail and close other GPU-heavy apps. VRAM use
-remains best effort because DirectML has no hard memory cap. Auto retries on CPU if a
-GPU session or inference fails; GPU + CPU and NVIDIA GPU modes report the failure.
+remains best effort because DirectML has no hard memory cap. Auto can retry with
+DirectML after a CUDA failure and then use CPU; strict GPU modes report the failure.
 Small remains the recommended 4 GB model for speed. Approximation and
 custom ONNX remain CPU engines.
 

@@ -13,7 +13,7 @@ const frontendContract = (() => {
   }
   function gpuPolicy(runtime, adapter, modelId = "depth-anything-v2-large") {
     const caps = runtime?.capabilities;
-    const adapterAvailable = Boolean(adapter || runtime?.gpu_available);
+    const adapterAvailable = Boolean(adapter || runtime?.gpu_available || runtime?.cuda_available);
     const reportedMemory = Number(adapter?.memory_mb);
     const memoryUnknown = !Number.isFinite(reportedMemory) || reportedMemory <= 0;
     const supported = capabilityV1(runtime);
@@ -29,12 +29,13 @@ const frontendContract = (() => {
   }
   function selectedGpuAdapter(runtime) {
     if (runtime?.gpu_device && typeof runtime.gpu_device === "object") return runtime.gpu_device;
+    if (runtime?.cuda_device && typeof runtime.cuda_device === "object") return runtime.cuda_device;
     const adapters = Array.isArray(runtime?.adapters) ? runtime.adapters : [];
     return adapters.find((adapter) => adapter?.selected === true || adapter?.is_selected === true) || (adapters.length === 1 ? adapters[0] : null);
   }
   function nvidiaGpuAvailable(runtime) {
     const adapter = selectedGpuAdapter(runtime);
-    if (!runtime?.gpu_available || !adapter) return false;
+    if ((!runtime?.gpu_available && !runtime?.cuda_available) || !adapter) return false;
     const vendorId = Number(adapter.vendor_id);
     return Number.isFinite(vendorId) ? vendorId === 0x10de : /nvidia/i.test(String(adapter.name || runtime.gpu_name || ""));
   }
@@ -51,12 +52,18 @@ const frontendContract = (() => {
       try { settings = effectiveQueueSettings(item, currentSettings); }
       catch (error) { return `${item?.name || "A ready file"}: its effective settings are invalid (${error.message})`; }
       const mode = settings.depth_mode;
+      if (settings.execution_mode === "cuda") {
+        if (mode === "balanced" || mode === "precision") return `${item?.name || "A ready file"}: CUDA mode requires a named neural model.`;
+        if (!runtime) return `${item?.name || "A ready file"}: checking NVIDIA CUDA support…`;
+        if (!supportsExecutionMode(runtime, "cuda") || !runtime.cuda_available) return `${item?.name || "A ready file"}: CUDA is unavailable. ${runtime.cuda_error || "Run .\\setup-cuda.ps1, then start with .\\run-cuda.ps1."}`;
+      }
       if (settings.execution_mode === "gpu" || settings.execution_mode === "hybrid") {
         if (mode === "balanced" || mode === "precision") return `${item?.name || "A ready file"}: GPU + CPU and NVIDIA GPU modes require a named neural model.`;
         if (!runtime) return `${item?.name || "A ready file"}: checking NVIDIA GPU support…`;
         if (!supportsExecutionMode(runtime, settings.execution_mode)) return `${item?.name || "A ready file"}: this runtime supports CPU execution only. Change this saved job to Auto or CPU and try again.`;
-        if (!runtime.gpu_available) return `${item?.name || "A ready file"}: DirectML is unavailable. Run .\\setup-gpu.ps1 and restart with .\\run.ps1, or choose Auto or CPU.`;
-        if (!nvidiaGpuAvailable(runtime)) return `${item?.name || "A ready file"}: NVIDIA GPU mode requires an NVIDIA DirectML adapter, but the selected adapter is ${selectedGpuAdapter(runtime)?.name || "not NVIDIA"}.`;
+        const hasBackend = settings.execution_mode === "hybrid" ? runtime.gpu_available || runtime.cuda_available : runtime.gpu_available;
+        if (!hasBackend) return `${item?.name || "A ready file"}: ${settings.execution_mode === "hybrid" ? "GPU inference" : "DirectML"} is unavailable. Run .\\setup-gpu.ps1${settings.execution_mode === "hybrid" ? " or .\\setup-cuda.ps1" : ""}, then restart StereoLab.`;
+        if (!nvidiaGpuAvailable(runtime)) return `${item?.name || "A ready file"}: NVIDIA GPU mode requires an NVIDIA adapter, but the selected adapter is ${selectedGpuAdapter(runtime)?.name || "not NVIDIA"}.`;
         if (mode === "depth-anything-v2-large" && !capabilityV1(runtime)) return `${item?.name || "A ready file"}: ${gpuPolicy(runtime, selectedGpuAdapter(runtime), mode).message || "This server does not report GPU capability schema v1. Upgrade StereoLab to enable Large GPU inference safely."}`;
       }
       if (mode === "balanced") continue;
@@ -360,7 +367,7 @@ const frontendContract = (() => {
     const provider = execution.active_provider;
     const accelerator = typeof execution.device === "string" && !/^cpu$/i.test(execution.device) ? `${execution.device} · ` : "";
     const label = provider && /CUDA|Dml|Tensorrt/i.test(provider) ? `${accelerator}GPU depth + CPU processing` : provider === "CPUExecutionProvider" || execution.device === "cpu" ? "CPU processing" : provider ? `${provider} depth` : "Device use not reported";
-    return [label, execution.fallback_reason ? `CPU fallback: ${execution.fallback_reason}` : "", pipeline === "overlapped" ? "video stages overlapped" : "", execution.video_depth_stats ? `${execution.video_depth_stats.neural_frames} neural / ${execution.video_depth_stats.flow_frames} flow frames` : ""].filter(Boolean).join(" · ");
+    return [label, execution.fallback_reason ? `Fallback: ${execution.fallback_reason}` : "", pipeline === "overlapped" ? "video stages overlapped" : "", execution.video_depth_stats ? `${execution.video_depth_stats.neural_frames} neural / ${execution.video_depth_stats.flow_frames} flow frames` : ""].filter(Boolean).join(" · ");
   }
   function moveReadyQueueItem(items, uid, direction) {
     if (!Array.isArray(items) || ![-1, 1].includes(direction)) return items;
@@ -501,7 +508,7 @@ const frontendContract = (() => {
     const enums = {
       layout: ["SBS", "XREAL_SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"],
       depth_mode: ["depth-anything-v2-small", "depth-anything-v2-small-fp16", "depth-anything-v2-base", "depth-anything-v2-large", "dpt-hybrid-midas", "balanced", "precision"],
-      execution_mode: ["auto", "hybrid", "gpu", "cpu"], input_size: [256, 384, 518], depth_interval: [1, 2], video_decode: ["software", "amd"],
+      execution_mode: ["auto", "hybrid", "cuda", "gpu", "cpu"], input_size: [256, 384, 518], depth_interval: [1, 2], video_decode: ["software", "amd"],
       resolution: ["1080p", "source"], quality: ["fast", "balanced", "high"]
     };
     for (const [key, values] of Object.entries(enums)) if (!values.includes(settings[key])) throw new Error(`${key} must be one of the supported values.`);
@@ -645,7 +652,7 @@ if (typeof document !== "undefined") (() => {
   let previewRevision = 0, resultRevision = -1, previewBusy = false, sourceError = "", previewError = "";
   let zoomState = { zoom: 1, panX: 0, panY: 0 }, panPointer = null, compareSplit = 50;
   let models = [], runtime = null, status = null, statusLoadError = "", customModelAvailable = false, catalogError = "";
-  function cpuOnlyRuntime(){const modes=runtime?.supported_execution_modes;return Array.isArray(modes)&&!modes.includes("gpu")&&!modes.includes("hybrid");}
+  function cpuOnlyRuntime(){const modes=runtime?.supported_execution_modes;return Array.isArray(modes)&&!modes.includes("gpu")&&!modes.includes("cuda")&&!modes.includes("hybrid");}
   function normalizeSettingsForRuntime(settings){const normalized={...settings};if(!frontendContract.supportsExecutionMode(runtime,normalized.execution_mode))normalized.execution_mode="auto";if(cpuOnlyRuntime()&&normalized.video_decode==="amd")normalized.video_decode="software";return normalized;}
   let historyCapabilities = null, historyCursor = null, historyLoading = false;
   let namingCapability = null, currentOutputNameTemplate = "{name}_{layout}";
@@ -744,12 +751,19 @@ if (typeof document !== "undefined") (() => {
   function largeGpuUpgradeRequired() { return ui.depthMode.value === "depth-anything-v2-large" && Boolean(runtime?.gpu_available) && !frontendContract.capabilityV1(runtime); }
   function gpuBlock() {
     const mode = ui.executionMode.value;
+    if (mode === "cuda") {
+      if (["balanced", "precision"].includes(ui.depthMode.value)) return "CUDA mode requires a named neural model. Choose Auto or CPU for visual approximation or custom ONNX.";
+      if (!runtime) return "Checking NVIDIA CUDA support…";
+      if (!frontendContract.supportsExecutionMode(runtime, "cuda") || !runtime.cuda_available) return `CUDA is unavailable. ${runtime.cuda_error || "Run .\\setup-cuda.ps1, then .\\run-cuda.ps1."}`;
+      return "";
+    }
     if (mode !== "gpu" && mode !== "hybrid") return "";
     if (["balanced", "precision"].includes(ui.depthMode.value)) return "GPU + CPU and NVIDIA GPU modes require a named neural model. Choose Auto or CPU for visual approximation or custom ONNX.";
     if (!runtime) return "Checking NVIDIA GPU support…";
     if (!frontendContract.supportsExecutionMode(runtime, mode)) return "This Linux runtime supports CPU execution only. Choose Auto or CPU to process with the CPU.";
-    if (!runtime.gpu_available) return "DirectML is unavailable. Run .\\setup-gpu.ps1 to prepare the separate .venv-gpu environment, then start it with .\\run.ps1. Or choose Auto or CPU.";
-    if (!frontendContract.nvidiaGpuAvailable(runtime)) return `NVIDIA GPU mode requires an NVIDIA DirectML adapter, but the selected adapter is ${frontendContract.selectedGpuAdapter(runtime)?.name || "not NVIDIA"}.`;
+    const hasBackend = mode === "hybrid" ? runtime.gpu_available || runtime.cuda_available : runtime.gpu_available;
+    if (!hasBackend) return `GPU inference is unavailable. Run .\\setup-gpu.ps1${mode === "hybrid" ? " or .\\setup-cuda.ps1" : ""}, then restart StereoLab. Or choose Auto or CPU.`;
+    if (!frontendContract.nvidiaGpuAvailable(runtime)) return `NVIDIA GPU mode requires an NVIDIA adapter, but the selected adapter is ${frontendContract.selectedGpuAdapter(runtime)?.name || "not NVIDIA"}.`;
     if (ui.depthMode.value === "depth-anything-v2-large" && !frontendContract.capabilityV1(runtime)) return gpuPolicy().message || "This server does not report GPU capability schema v1. Upgrade StereoLab to enable Large GPU inference safely.";
     return "";
   }
@@ -760,22 +774,23 @@ if (typeof document !== "undefined") (() => {
     ui.deviceDetails.hidden = Boolean(linuxCpuOnly);
     if (linuxCpuOnly) ui.executionImpact.textContent = "This Linux release uses CPU processing. Speed depends on the selected model, input detail, and source media.";
     if (linuxCpuOnly) ui.videoDecodeNote.textContent = "This Linux CPU runtime uses software video decoding. AMD D3D11VA decoding is unavailable.";
-    ui.executionNote.classList.toggle("device-warning", Boolean(blocked) || !linuxCpuOnly && mode !== "cpu" && (largeOnLimitedGpu() || largeGpuUpgradeRequired() || runtime && !runtime.gpu_available));
+    ui.executionNote.classList.toggle("device-warning", Boolean(blocked) || !linuxCpuOnly && mode !== "cpu" && (largeOnLimitedGpu() || largeGpuUpgradeRequired() || runtime && !runtime.gpu_available && !runtime.cuda_available));
     if (blocked) { ui.executionNote.textContent = blocked; return; }
     if (linuxCpuOnly) { ui.executionNote.textContent = "Linux CPU mode: Auto and CPU use the CPU for depth estimation and media stages. GPU + CPU and NVIDIA GPU modes are unavailable in this runtime."; return; }
     if (["balanced", "precision"].includes(ui.depthMode.value)) { ui.executionNote.textContent = ui.depthMode.value === "balanced" ? "Visual approximation uses CPU image cues. Choose a named neural depth engine to use GPU depth estimation." : "Custom ONNX models use CPU in this studio. Choose a named neural depth engine to use GPU depth estimation."; return; }
     if (mode === "cpu") { ui.executionNote.textContent = "CPU depth estimation and media stages. Video may still use NVIDIA NVENC when available."; return; }
     if (!runtime) { ui.executionNote.textContent = "Checking local GPU support…"; return; }
+    if (mode === "cuda") { const device=runtime.cuda_device; ui.executionNote.textContent = `${device?.name || "NVIDIA CUDA device"} available${device?.driver_model ? ` · ${device.driver_model}` : ""}${runtime.gpu_verified ? " · inference verified" : " · inference not yet verified"}. CUDA is required; failures are reported.`; return; }
     if (largeGpuUpgradeRequired()) { ui.executionNote.textContent = gpuPolicy().message; return; }
     if (largeOnLimitedGpu()) {
       const policy = gpuPolicy(), cap = policy.inputCap;
       ui.executionNote.textContent = `Large will try DirectML on this ${policy.memoryUnknown ? "GPU with unknown memory, treated conservatively" : "limited-memory GPU"} with a ${cap} px long-side cap. Start at 256 px detail to reduce memory use. Auto can fall back to CPU if GPU inference fails; GPU + CPU and NVIDIA GPU modes report the error.`;
       return;
     }
-    if (!runtime.gpu_available) { ui.executionNote.textContent = `CPU fallback: ${runtime.error || "no compatible GPU runtime and NVIDIA adapter detected"}. Optional GPU setup: .\\setup-gpu.ps1 (separate .venv-gpu), then .\\run.ps1.`; return; }
+    if (!runtime.gpu_available && !runtime.cuda_available) { ui.executionNote.textContent = `CPU fallback: ${runtime.error || "no compatible GPU runtime and NVIDIA adapter detected"}. Optional setup: .\\setup-gpu.ps1 for DirectML or .\\setup-cuda.ps1 for CUDA.`; return; }
     const policy = gpuPolicy(), capNote = policy.supported ? ` Named-model input cap ${policy.inputCap} px.` : "";
-    const modeNote = mode === "gpu" ? "NVIDIA GPU required for depth; failures will be reported." : mode === "hybrid" ? "NVIDIA GPU required for depth; CPU handles media stages, and GPU failures will be reported." : "Auto prefers the selected GPU for depth and can fall back to CPU.";
-    ui.executionNote.textContent = `${runtime.gpu_name || "NVIDIA GPU"} available${runtime.gpu_verified ? " · inference verified" : " · inference not yet verified"}.${capNote} ${modeNote}`;
+    const modeNote = mode === "gpu" ? "NVIDIA DirectML required for depth; failures will be reported." : mode === "hybrid" ? "CUDA or DirectML handles depth while CPU handles media stages; GPU failures will be reported." : "Auto prefers CUDA, then DirectML, and can fall back to CPU.";
+    ui.executionNote.textContent = `${runtime.gpu_name || runtime.cuda_device?.name || "NVIDIA GPU"} available${runtime.gpu_verified ? " · inference verified" : " · inference not yet verified"}.${capNote} ${modeNote}`;
   }
   function readiness() {
     const blocked = gpuBlock();
@@ -1074,7 +1089,7 @@ if (typeof document !== "undefined") (() => {
       const meta=el("div","file-meta"),state=el("span",`file-status ${item.state}`,item.message||({ready:"Ready to convert",uploading:"Uploading locally",completed:"Complete",failed:"Failed",canceled:"Canceled"}[item.state]||item.state));meta.append(state);
       const cache=item.depthCache; if(cache){const cacheLabel=frontendContract.depthCacheStatusLabel(cache,formatBytes);if(cacheLabel)meta.append(el("span","",cacheLabel));}
       const info=[formatBytes(item.file?.size||item.size),item.layout].filter(Boolean).join(" · ");if(info)meta.append(el("span","",info));copy.append(name,meta);
-      const execution=frontendContract.executionSummary(item.execution,item.pipeline);if(execution)copy.append(el("div","queue-execution",execution));else if(item.executionMode)copy.append(el("div","queue-execution",`Requested: ${{auto:"Auto",hybrid:"GPU + CPU",gpu:"NVIDIA GPU",cpu:"CPU only"}[item.executionMode]||item.executionMode} · awaiting execution`));
+      const execution=frontendContract.executionSummary(item.execution,item.pipeline);if(execution)copy.append(el("div","queue-execution",execution));else if(item.executionMode)copy.append(el("div","queue-execution",`Requested: ${{auto:"Auto",hybrid:"GPU + CPU",cuda:"NVIDIA CUDA",gpu:"NVIDIA GPU · DirectML",cpu:"CPU only"}[item.executionMode]||item.executionMode} · awaiting execution`));
       if(item.depthCacheError)copy.append(el("small","queue-source-detail",item.depthCacheError));
       if(item.depthCache?.warning)copy.append(el("small","queue-source-detail",`Depth cache warning: ${item.depthCache.warning.slice(0,240)}`));
       const runtimeDetails=progressDetails(item);if(runtimeDetails.length)copy.append(el("div","queue-runtime",runtimeDetails.join(" · ")));
@@ -1129,10 +1144,10 @@ if (typeof document !== "undefined") (() => {
   function saveHidden(){try{sessionStorage.setItem("stereolab.hiddenJobs",JSON.stringify([...hiddenJobs]));}catch{/* Keep this page usable without storage. */}}
   function getSettings(){const mode=ui.depthMode.value;const inputSize=mode==="dpt-hybrid-midas"?"384":mode==="precision"||/^depth-anything-v2-(small(?:-fp16)?|base|large)$/.test(mode)?ui.modelSize.value:"518";return {layout:ui.layoutSelect.value,strength:ui.strength.value,convergence:ui.convergence.value,depth_mode:mode,execution_mode:ui.executionMode.value,input_size:inputSize,resolution:ui.resolution.value,quality:ui.quality.value,temporal_smoothing:ui.temporalSmoothing.value,depth_interval:ui.depthInterval.value,video_decode:ui.videoDecode.value,use_depth_cache:String(ui.useDepthCache.checked),edge_refinement:String(ui.edgeRefinement.checked),invert_depth:String(ui.invertDepth.checked)};}
   function currentSettingsForPreset(){const raw=getSettings();return {layout:raw.layout,strength:Number(raw.strength),convergence:Number(raw.convergence),depth_mode:raw.depth_mode,execution_mode:raw.execution_mode,input_size:Number(raw.input_size),resolution:raw.resolution,quality:raw.quality,temporal_smoothing:Number(raw.temporal_smoothing),depth_interval:Number(raw.depth_interval),video_decode:raw.video_decode,use_depth_cache:ui.useDepthCache.checked,edge_refinement:ui.edgeRefinement.checked,invert_depth:ui.invertDepth.checked};}
-  function settingsDescription(settings){const names={SBS:"Side by side · full",XREAL_SBS:"XREAL 1S · Full SBS",HALFSBS:"Side by side · half",TB:"Top / bottom · full",HALFTB:"Top / bottom · half",CROSS:"Cross-eye",ANAGLYPH:"Anaglyph · red / cyan",DEPTH:"Depth map",RGBD:"RGB + depth"};const models={"depth-anything-v2-small":"Small","depth-anything-v2-small-fp16":"Small FP16","depth-anything-v2-base":"Base","depth-anything-v2-large":"Large","dpt-hybrid-midas":"DPT Hybrid · MiDaS",balanced:"Visual approximation",precision:"Custom ONNX"};const devices={auto:"Auto",hybrid:"GPU + CPU · hybrid",gpu:"NVIDIA GPU",cpu:"CPU only"};const sizes=settings.depth_mode==="dpt-hybrid-midas"?"fixed 384 px":`${settings.input_size} px`;return `${names[settings.layout]} · strength ${Number(settings.strength).toFixed(1)} · convergence ${Number(settings.convergence).toFixed(2)} · ${models[settings.depth_mode]} · ${sizes} · ${devices[settings.execution_mode]} · ${settings.resolution==="source"?"Match source":"Up to 1080p"} · ${settings.quality} encoding · ${settings.depth_interval===2?"alternate-frame depth + flow":"depth on every frame"} · ${settings.video_decode==="amd"?"AMD decode requested":"software decode"} · video depth cache ${settings.use_depth_cache?"on":"off"} · smoothing ${Number(settings.temporal_smoothing).toFixed(2)} · edge refinement ${settings.edge_refinement?"on":"off"} · invert ${settings.invert_depth?"on":"off"}`;}
+  function settingsDescription(settings){const names={SBS:"Side by side · full",XREAL_SBS:"XREAL 1S · Full SBS",HALFSBS:"Side by side · half",TB:"Top / bottom · full",HALFTB:"Top / bottom · half",CROSS:"Cross-eye",ANAGLYPH:"Anaglyph · red / cyan",DEPTH:"Depth map",RGBD:"RGB + depth"};const models={"depth-anything-v2-small":"Small","depth-anything-v2-small-fp16":"Small FP16","depth-anything-v2-base":"Base","depth-anything-v2-large":"Large","dpt-hybrid-midas":"DPT Hybrid · MiDaS",balanced:"Visual approximation",precision:"Custom ONNX"};const devices={auto:"Auto",hybrid:"GPU + CPU · hybrid",cuda:"NVIDIA CUDA",gpu:"NVIDIA GPU · DirectML",cpu:"CPU only"};const sizes=settings.depth_mode==="dpt-hybrid-midas"?"fixed 384 px":`${settings.input_size} px`;return `${names[settings.layout]} · strength ${Number(settings.strength).toFixed(1)} · convergence ${Number(settings.convergence).toFixed(2)} · ${models[settings.depth_mode]} · ${sizes} · ${devices[settings.execution_mode]} · ${settings.resolution==="source"?"Match source":"Up to 1080p"} · ${settings.quality} encoding · ${settings.depth_interval===2?"alternate-frame depth + flow":"depth on every frame"} · ${settings.video_decode==="amd"?"AMD decode requested":"software decode"} · video depth cache ${settings.use_depth_cache?"on":"off"} · smoothing ${Number(settings.temporal_smoothing).toFixed(2)} · edge refinement ${settings.edge_refinement?"on":"off"} · invert ${settings.invert_depth?"on":"off"}`;}
   function refreshPerformancePresetStatus(){const current=currentSettingsForPreset(),dirty=frontendContract.hasUnsavedSettings(performanceBaseline,current);ui.performancePresetStatus.textContent=`${importedPresetBaseline?"Imported settings":ui.performancePreset.options[ui.performancePreset.selectedIndex]?.text || "Custom settings"} · ${dirty?"Unsaved changes":"Saved preset"}`;ui.performancePresetSummary.textContent=`Exact settings: ${settingsDescription(current)}`;ui.resetPerformancePreset.disabled=ui.performancePreset.value==="custom";}
   function applyExecutionModeCapabilities(){
-    const modes=["auto","hybrid","gpu","cpu"], reported=runtime?.supported_execution_modes;
+    const modes=["auto","hybrid","cuda","gpu","cpu"], reported=runtime?.supported_execution_modes;
     const supported=Array.isArray(reported)?new Set(["auto",...reported.filter((mode)=>modes.includes(mode))]):new Set(modes);
     for(const option of ui.executionMode.options){const available=supported.has(option.value);option.hidden=!available;option.disabled=!available;}
     if(!supported.has(ui.executionMode.value))ui.executionMode.value="auto";
@@ -1356,7 +1371,7 @@ if (typeof document !== "undefined") (() => {
   function renderRuntime(){
     if(!runtime)return;
     const providers=(runtime.providers || []).join(", ") || "none reported";
-    const capability=cpuOnlyRuntime()?"CPU execution only; GPU execution is unavailable in this Linux build":runtime.gpu_available?`${runtime.gpu_name || "NVIDIA GPU"} available · ${runtime.gpu_verified ? "GPU inference verified" : "GPU inference not yet verified"}`:"GPU unavailable in this runtime";
+    const capability=runtime.cuda_available?`${runtime.cuda_device?.name || "NVIDIA CUDA device"} available · ${runtime.gpu_verified ? "GPU inference verified" : "GPU inference not yet verified"}`:runtime.gpu_available?`${runtime.gpu_name || "NVIDIA GPU"} available · ${runtime.gpu_verified ? "GPU inference verified" : "GPU inference not yet verified"}`:cpuOnlyRuntime()?"CPU execution only; GPU execution is unavailable in this runtime":"GPU unavailable in this runtime";
     const actual=runtime.last_execution?.requested_mode ? `Last execution: ${frontendContract.executionSummary(runtime.last_execution)}` : runtime.active_provider ? `Last provider: ${runtime.active_provider}` : "No inference has run in this runtime";
     ui.runtimeDescription.textContent=runtime.available?`ONNX Runtime ${runtime.version || ""} ready. Providers: ${providers}. ${capability}. ${actual}.${runtime.error ? ` ${runtime.error}` : ""}`:`ONNX Runtime is missing. Install the project dependencies, then restart StereoLab.${runtime.error ? ` ${runtime.error}` : ""}`;
     ui.runtimeCommand.hidden=Boolean(runtime.available);

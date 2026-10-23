@@ -80,7 +80,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 LAYOUTS = {"SBS", "XREAL_SBS", "HALFSBS", "TB", "HALFTB", "CROSS", "ANAGLYPH", "DEPTH", "RGBD"}
 NEURAL_MODES = set(MODEL_SPECS)
 DEPTH_MODES = {"balanced", "precision"} | NEURAL_MODES
-EXECUTION_MODES = {"auto", "cpu", "gpu", "hybrid"}
+EXECUTION_MODES = {"auto", "cpu", "gpu", "cuda", "hybrid"}
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
 MAX_MODEL_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 CALIBRATION_UPLOAD_BYTES = 24 * 1024 * 1024
@@ -1647,7 +1647,7 @@ def validate_depth_mode(mode: str, execution_mode: str = "auto") -> None:
         raise HTTPException(status_code=400, detail="Choose a supported depth model or approximation.")
     if mode == "precision" and not MODEL_PATH.is_file():
         raise HTTPException(status_code=400, detail="Custom ONNX mode needs a compatible model. Import one in the model panel.")
-    if execution_mode in {"gpu", "hybrid"} and mode not in NEURAL_MODES:
+    if execution_mode in {"gpu", "cuda", "hybrid"} and mode not in NEURAL_MODES:
         raise HTTPException(status_code=400, detail="NVIDIA GPU and GPU + CPU modes require a named neural model. Choose Auto or CPU for approximation or custom ONNX.")
     if mode in NEURAL_MODES:
         try:

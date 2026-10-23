@@ -1,0 +1,10 @@
+# CUDA and DirectML ONNX Runtime wheels both provide the `onnxruntime` module.
+# Keep CUDA in its own environment; these extras install matching CUDA/cuDNN DLLs.
+fastapi>=0.115,<1
+starlette>=1.8.0,<2
+uvicorn>=0.34,<1
+python-multipart>=0.0.20,<1
+numpy>=1.26,<3
+opencv-python>=4.10,<6
+onnxruntime-gpu[cuda,cudnn]==1.24.4
+onnx>=1.17,<2

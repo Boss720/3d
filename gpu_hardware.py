@@ -7,7 +7,10 @@ No subprocess or hardware enumeration is performed per inference frame.
 from __future__ import annotations
 
 import ctypes
+import csv
 import functools
+import io
+import subprocess
 import sys
 import uuid
 from typing import Any
@@ -97,3 +100,26 @@ def probe_hardware() -> dict[str, Any]:
         return {'adapters': adapters, 'selected_adapter': select_adapter(adapters), 'error': None}
     except Exception as exc:
         return {'adapters': [], 'selected_adapter': None, 'error': str(exc)}
+
+
+@functools.lru_cache(maxsize=1)
+def probe_cuda_devices() -> dict[str, Any]:
+    """Read CUDA device ordinals and driver models from NVIDIA's own CLI."""
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,name,memory.total,driver_model.current,pci.bus_id',
+             '--format=csv,noheader,nounits'],
+            check=True, capture_output=True, text=True, timeout=5,
+        )
+        devices = []
+        for row in csv.reader(io.StringIO(result.stdout)):
+            if len(row) != 5:
+                continue
+            index, name, memory, driver_model, bus_id = (value.strip() for value in row)
+            devices.append({
+                'id': int(index), 'name': name, 'memory_mb': round(float(memory)),
+                'driver_model': driver_model, 'pci_bus_id': bus_id,
+            })
+        return {'devices': devices, 'error': None if devices else 'nvidia-smi found no NVIDIA CUDA devices.'}
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return {'devices': [], 'error': str(exc)}
