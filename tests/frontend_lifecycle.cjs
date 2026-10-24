@@ -112,7 +112,7 @@ function fixture(storage = new Map()) {
   };`);
   vm.runInContext(source, context, {filename: 'static/app.js'});
   const app = context.lifecycle;
-  const defaults = {layoutSelect: 'SBS', depthMode: 'balanced', executionMode: 'cpu', modelSize: '384', strength: '5', convergence: '.5', temporalSmoothing: '.35', depthInterval: '1', videoDecode: 'software', resolution: '1080p', quality: 'balanced', previewDetail: 'proxy', processedClipDuration: '3', calibrationBudget: '15', performancePreset: 'balanced'};
+  const defaults = {layoutSelect: 'SBS', depthMode: 'balanced', executionMode: 'cpu', modelSize: '384', strength: '5', convergence: '.5', temporalSmoothing: '.35', depthInterval: '1', videoDecode: 'software', renderer: 'fast', resolution: '1080p', quality: 'balanced', previewDetail: 'proxy', processedClipDuration: '3', calibrationBudget: '15', performancePreset: 'balanced'};
   for (const [id, value] of Object.entries(defaults)) app.ui[id].value = value;
   app.ui.edgeRefinement.checked = true;
   app.ui.queueEmpty.querySelector('strong').textContent = 'A little empty, for now.';

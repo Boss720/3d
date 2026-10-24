@@ -1,3 +1,22 @@
+# StereoLab v0.2.0-beta.6
+
+This Windows x64 beta broadens NVIDIA GPU support:
+
+- DirectML setup covers DX12-capable NVIDIA adapters, including GTX 600-series and newer cards, subject to compatible Windows graphics drivers.
+- CUDA device selection now treats detected NVIDIA models uniformly and prefers the GPU with the most VRAM instead of hard-coding a Tesla V100 preference.
+- CUDA device IDs now come from the CUDA runtime, respecting visibility masks and device ordering. Physical `nvidia-smi` indices are diagnostic metadata only.
+- The CUDA edition pins cuDNN 9.10.2.21 to retain older Maxwell/Pascal/Volta kernels; build preflight rejects a different cuDNN version. Devices below compute capability 5.2 or with unknown capability are excluded from CUDA selection, with guidance to use DirectML or CPU.
+- Auto preserves separate failure cooldowns for CUDA and DirectML; a successful fallback no longer clears the failed backend's cooldown.
+- The DirectML installer takes its launcher from the selected package and refuses an incomplete package.
+- CUDA packaging excludes obsolete pip backup DLLs, keeping the selected runtime version intact.
+- Linux CUDA policy tests use explicit device inventories, covering CPU-only and CUDA-capable environments without depending on host hardware.
+
+GPU execution is reported as verified only after a named-model inference succeeds. CUDA compatibility depends on the specific card, driver, and runtime package; this release has not been validated on every NVIDIA model.
+
+The rebuilt DirectML and CUDA editions each passed strict named Small inference, generated XREAL SBS video/audio export, cache provenance, restart/history, and save-copy acceptance on a GeForce GTX 1650 Ti. Both installers passed full acceptance from installed paths containing spaces, with all payload hashes matching (3 DirectML files and 200 CUDA files), followed by successful uninstall and registration cleanup. CUDA also passed with a restricted PATH to exercise its bundled runtime. Full CPU and DirectML suites each ran 709 tests successfully, with 9 and 5 skips respectively; the CUDA engine suite passed 58 tests. NVENC acceptance permits the verifier's explicit 60 dB per-frame tolerance while requiring exact audio, geometry, frame count, and timing. These checks cover one NVIDIA GPU model and do not establish compatibility with every NVIDIA card. See `RELEASE_READINESS.md` for exact artifact hashes and remaining qualification limits.
+
+---
+
 # StereoLab v0.2.0-beta.3
 
 This Windows x64 beta fixes issues found during review:

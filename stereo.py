@@ -1,9 +1,9 @@
 """CPU stereo synthesis and job-local depth stabilization.
 
-Depth is relative inverse depth: 0 is far and 1 is near. Eye synthesis uses
-inverse image warps, so it cannot reveal hidden surfaces or resolve visibility
-at overlapping depth edges. Replicated borders and stretched edge pixels are
-an approximation, not reconstructed geometry or an occlusion inpainting model.
+Depth is relative inverse depth: 0 is far and 1 is near. Default eye synthesis
+uses inverse image warps. Experimental visibility synthesis uses nearest-pixel
+forward splats and bounded horizontal hole filling. Neither reconstructs hidden
+surfaces; both can produce artifacts around depth edges.
 """
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import math
 
 import cv2
 import numpy as np
+
+from renderer_quality import render_visibility_pair, visibility_summary
 
 
 XREAL_FULL_SBS = 'XREAL_SBS'
@@ -139,12 +141,22 @@ def pack_output(
     return result
 
 
+def _render_method(method: str) -> str:
+    if method not in ('fast', 'visibility'):
+        raise ValueError('Renderer method must be fast or visibility.')
+    return method
+
+
 def render_output(frame: np.ndarray, depth: np.ndarray, strength: float,
-                  convergence: float, layout: str) -> np.ndarray:
-    """Render only the views consumed by the selected output layout."""
+                  convergence: float, layout: str, *, method: str = 'fast') -> np.ndarray:
+    """Render consumed views, with explicit opt-in to experimental visibility."""
+    _render_method(method)
     if layout in {'DEPTH', 'RGBD'}:
         return pack_output(frame, depth, frame, frame, layout)
-    left, right = make_eye_pair(frame, depth, strength, convergence)
+    if method == 'visibility':
+        left, right, _ = render_visibility_pair(frame, depth, strength, convergence)
+    else:
+        left, right = make_eye_pair(frame, depth, strength, convergence)
     return pack_output(frame, depth, left, right, layout)
 
 
@@ -157,12 +169,21 @@ class StereoRenderer:
 
     def __init__(self):
         self._shape = None
+        self.last_stats = None
 
     def render(self, frame: np.ndarray, depth: np.ndarray, strength: float,
-               convergence: float, layout: str) -> np.ndarray:
+               convergence: float, layout: str, *, method: str = 'fast') -> np.ndarray:
+        _render_method(method)
         shape = _frame_size(frame)
+        self.last_stats = {'method': method, 'stereo_views_rendered': False}
         if layout in {'DEPTH', 'RGBD'}:
             return pack_output(frame, depth, frame, frame, layout)
+        if method == 'visibility':
+            left, right, stats = render_visibility_pair(frame, depth, strength, convergence)
+            result = pack_output(frame, depth, left, right, layout)
+            self.last_stats = visibility_summary(stats)
+            return result
+        self.last_stats = {'method': 'fast', 'stereo_views_rendered': True}
         height, width = shape
         if depth.shape != shape:
             raise ValueError('Depth dimensions must match the source frame.')

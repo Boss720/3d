@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from renderer_quality import render_visibility_pair
+from renderer_quality import _eye, render_visibility_pair
 
 
 class VisibilityRendererTests(unittest.TestCase):
@@ -58,6 +58,20 @@ class VisibilityRendererTests(unittest.TestCase):
         left, _, _ = render_visibility_pair(frame, depth, 10, 0)
         # Both nonzero-depth samples land at 103; the nearer source at 100 wins.
         np.testing.assert_array_equal(left[:, 103], frame[:, 100])
+
+    def test_equal_depth_row_splat_tie_selects_rightmost_source(self):
+        # Exercise the deterministic row primitive directly: normal public
+        # equal-depth pixels share a displacement and ordinarily cannot tie.
+        frame = np.zeros((1, 200, 3), np.uint8)
+        frame[:, 100] = [1, 2, 200]
+        frame[:, 102] = [200, 2, 1]
+        depth = np.zeros((1, 200), np.float32)
+        depth[:, 100] = depth[:, 102] = .5
+        disparity = np.zeros_like(depth)
+        disparity[:, 100], disparity[:, 102] = 3, 1
+        result, stats = _eye(frame, depth, disparity, 1, 4, 3)
+        np.testing.assert_array_equal(result[:, 103], frame[:, 102])
+        self.assertEqual(stats['collision_count'], 2)
 
     def test_border_treatment_is_measured_and_fill_distance_is_bounded(self):
         frame = np.full((2, 200, 3), [12, 34, 56], np.uint8)

@@ -107,3 +107,22 @@ def render_visibility_pair(frame: np.ndarray, depth: np.ndarray, strength: float
                          'max_fill_distance': max(left_stats['max_fill_distance'], right_stats['max_fill_distance']),
                          'left': left_stats, 'right': right_stats,
                          'surface_recovery_claimed': False}
+
+
+def visibility_summary(stats: dict) -> dict:
+    """Return bounded JSON diagnostics without retaining per-pixel masks."""
+    eye_fields = ('hole_fraction', 'unfilled_fraction', 'max_fill_distance',
+                  'collision_count', 'outside_source_count')
+    return {
+        'schema_version': stats['schema_version'],
+        'method': 'visibility',
+        'algorithm': stats['method'],
+        'stereo_views_rendered': True,
+        'fill_radius': stats['fill_radius'],
+        'max_displacement_pixels': stats['max_displacement_pixels'],
+        'raster_displacement_limit_pixels': stats['raster_displacement_limit_pixels'],
+        'max_fill_distance': stats['max_fill_distance'],
+        'left': {key: stats['left'][key] for key in eye_fields},
+        'right': {key: stats['right'][key] for key in eye_fields},
+        'surface_recovery_claimed': False,
+    }

@@ -12,7 +12,7 @@ These show the app using a generated illustration. The preview uses Visual appro
 
 ![StereoLab side-by-side stereo preview of the sample illustration](static/screenshots/stereolab-stereo-preview.png)
 
-**Download:** Get the Windows beta from the [GitHub Releases page](https://github.com/Boss720/3d/releases). The current version is `v0.2.0-beta.3`. See [release notes](RELEASE_NOTES.md) for the latest fixes. The older `v0.1.0` download predates the repository's MIT license notice.
+**Download:** Get Windows builds from the assets on the [GitHub Releases page](https://github.com/Boss720/3d/releases). See [release notes](RELEASE_NOTES.md) for changes and [release readiness](RELEASE_READINESS.md) for candidate verification. The older `v0.1.0` download predates the repository's MIT license notice.
 
 ## Quick start (from source)
 
@@ -53,7 +53,7 @@ Building the installer also requires Inno Setup 6. For current test coverage and
 
 A native Linux x86-64 CPU package can be built on Ubuntu 22.04 to retain the intended glibc baseline. CI uses Python 3.12.15 and the exact dependency set in `requirements-linux-lock.txt`. Install Python, FFmpeg, and the system OpenCV libraries, then run `bash ./scripts/build-linux.sh`. The archive, dependency lock and checksum are written under `.runtime/linux-build/`. The candidate from `b26db2d` passed packaged launch, named-model CPU inference and generated audio/video conversion on Ubuntu 22.04 and 24.04. See [LINUX.md](LINUX.md) for launch instructions, storage paths and qualification limits. Optional CUDA inference is available to source environments with `onnxruntime-gpu` and an NVIDIA driver; the Linux release package remains CPU-only. The published GitHub release currently contains Windows downloads only.
 
-## NVIDIA GTX GPU and CPU cooperation
+## NVIDIA GPU and CPU cooperation
 
 For Windows GPU acceleration, run `.\setup-gpu.ps1` once, then restart with `.\run.ps1`.
 The setup creates a separate `.venv-gpu` environment containing ONNX Runtime DirectML;
@@ -66,17 +66,19 @@ To use the GPU environment on the currently open port explicitly:
 .\.venv-gpu\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8766
 ```
 
-The GTX 1650 Ti works through DirectML/DirectX 12; RTX hardware, TensorRT and a CUDA
-toolkit are not required for that path. DXGI enumeration selects the actual NVIDIA
-adapter: this machine has AMD graphics at index 0 and the GTX at index 1. ONNX
-Runtime's registered provider is a capability signal; the UI reports verified
-inference separately.
+DirectML uses DirectX 12 and supports a broad range of NVIDIA cards, including
+Kepler-generation GTX 600-series and newer GPUs with a compatible Windows driver.
+RTX hardware, TensorRT and a CUDA toolkit are not required for that path. DXGI
+enumeration selects the actual NVIDIA adapter even when integrated graphics is
+listed first. ONNX Runtime's registered provider is a capability signal; the UI
+reports verified inference separately.
 
-For Tesla V100 or other supported NVIDIA CUDA hardware, run `setup-cuda.ps1` and
+For NVIDIA CUDA hardware supported by the installed driver and ONNX Runtime CUDA
+package, run `setup-cuda.ps1` and
 start with `run-cuda.ps1`. This keeps `onnxruntime-gpu` and its CUDA/cuDNN DLLs in a separate `.venv-cuda`
 environment. Select **NVIDIA CUDA** for strict CUDA inference, or **Auto** to prefer
-CUDA when available. V100 may run with the NVIDIA TCC driver model; StereoLab does not
-switch driver modes and CUDA inference does not require TCC. Confirm the mode with
+CUDA when available. CUDA runs on supported NVIDIA devices in either WDDM or TCC
+driver mode; StereoLab does not switch driver modes. Confirm the mode with
 `nvidia-smi`; StereoLab only marks GPU execution verified after a named-model inference
 succeeds.
 
@@ -85,8 +87,20 @@ run `setup-cuda.ps1`, then `build-cuda-exe.ps1`, and optionally
 `build-cuda-installer.ps1`. The CUDA build is written under
 `.runtime/windows-cuda/`; it bundles the pip-provided NVIDIA CUDA/cuDNN runtime DLLs
 and installs side by side with the DirectML edition. The normal `build-exe.ps1` and
-`build-installer.ps1` continue to produce the DirectML edition. V100 hardware inference
-must be verified on the target machine before relying on that device path.
+`build-installer.ps1` continue to produce the DirectML edition. CUDA compatibility
+depends on the installed package's CUDA/cuDNN versions and NVIDIA driver. The CUDA
+edition pins cuDNN 9.10.2 to retain its Maxwell, Pascal and Volta kernels; its ONNX
+Runtime wheel requires compute capability 5.2 or newer. Unsupported or unknown
+capabilities are excluded from CUDA selection. Use DirectML for older DirectX
+12-capable cards, or CPU when neither GPU backend is supported. This compatibility
+range comes from the runtime dependencies; actual inference has been checked on a
+GTX 1650 Ti, and other GPU models still require verification on their own hardware.
+
+On systems with multiple NVIDIA GPUs, StereoLab selects the compatible visible
+CUDA device with the most VRAM. CUDA runtime enumeration respects
+`CUDA_VISIBLE_DEVICES` and `CUDA_DEVICE_ORDER`; `nvidia-smi` physical indices are
+used only for diagnostics. Set visibility before starting the app and restart it
+after changing these variables.
 
 Processing device choices:
 

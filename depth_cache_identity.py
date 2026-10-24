@@ -112,7 +112,7 @@ def build_cache_key(
     temporal_smoothing = _require_finite_number(
         temporal_smoothing, "temporal_smoothing", minimum=0
     )
-    depth_interval = _require_int(depth_interval, "depth_interval")
+    depth_interval = _require_int(depth_interval, "depth_interval", minimum=0)
     pipeline_version = _require_text(pipeline_version, "pipeline_version")
 
     for name, identity in (

@@ -1,6 +1,6 @@
 param(
     [string]$PackageDir = (Join-Path $PSScriptRoot '.runtime\windows-cuda\dist\StereoLab'),
-    [string]$AppVersion = '0.2.0-beta.5'
+    [string]$AppVersion = '0.2.0-beta.6'
 )
 
 $ErrorActionPreference = 'Stop'

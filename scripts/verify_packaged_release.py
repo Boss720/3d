@@ -48,8 +48,34 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+def validate_execution(execution, execution_mode, *, cached=False):
+    expected_provider = {'gpu': 'DmlExecutionProvider', 'cuda': 'CUDAExecutionProvider'}[execution_mode]
+    if cached:
+        require(execution.get('device') == 'cpu' and execution.get('active_provider') is None
+                and execution.get('gpu_verified') is False and execution.get('depth_cache_hit') is True
+                and execution.get('cached_execution', {}).get('active_provider') == expected_provider,
+                f'Cached execution provenance is inaccurate for {execution_mode}: {execution}')
+    else:
+        require(execution.get('active_provider') == expected_provider and execution.get('gpu_verified') is True
+                and not execution.get('fallback_reason'),
+                f'Strict Small {execution_mode} not verified: {execution}')
+
+
 def quote_ps(value):
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def canonical_launcher_identity(identity, expected_exe):
+    expected_exe = Path(expected_exe).resolve()
+    require(isinstance(identity.get('pid'), int) and identity['pid'] > 0
+            and bool(identity.get('started')), 'Launcher PID or creation time is missing.')
+    # Start-Process can return a null Path immediately for a one-folder EXE.
+    # Its FilePath argument is known; retain the returned PID and creation time
+    # so stop() still independently checks both path and time before termination.
+    observed_path = identity.get('path')
+    require(observed_path is None or Path(observed_path).resolve() == expected_exe,
+            f'Launcher is not the requested executable: {identity}')
+    return {**identity, 'path': str(expected_exe)}
 
 
 def powershell(script):
@@ -207,7 +233,7 @@ class Verifier:
             f"-RedirectStandardOutput {quote_ps(stdout)} -RedirectStandardError {quote_ps(stderr)}; "
             "@{pid=$p.Id; path=$p.Path; started=$p.StartTime.ToUniversalTime().ToString('o'); "
             "parent_pid=$PID}|ConvertTo-Json -Compress")
-        root = json.loads(powershell(command))
+        root = canonical_launcher_identity(json.loads(powershell(command)), self.args.exe)
         self.owned.append(root)
         launch = {'started_at': utc(), 'port': self.port, 'launcher': root,
                   'stdout': str(stdout), 'stderr': str(stderr)}
@@ -294,7 +320,7 @@ class Verifier:
         require(not errors, '; '.join(errors))
 
     def submit(self, name, **overrides):
-        settings = {'depth_mode': MODEL, 'execution_mode': 'gpu', 'layout': self.args.layout,
+        settings = {'depth_mode': MODEL, 'execution_mode': self.args.execution_mode, 'layout': self.args.layout,
                     'input_size': '256', 'resolution': 'source', 'quality': 'fast',
                     'temporal_smoothing': '0.35', 'use_depth_cache': 'true', 'video_decode': 'software',
                     'output_name_template': '{name}_{layout}', **overrides}
@@ -458,16 +484,12 @@ console.log(JSON.stringify({performed:true,widths,errors,default_cache_off:true,
         self.check('stereo_geometry_frame_count_audio_timing')
         execution = first['execution']
         require(first['depth_cache']['state'] == 'stored', f'First cache was not stored: {first["depth_cache"]}')
-        require(execution.get('active_provider') == 'DmlExecutionProvider' and execution.get('gpu_verified') is True
-                and not execution.get('fallback_reason'), f'Strict Small GPU not verified: {execution}')
+        validate_execution(execution, self.args.execution_mode)
         self.check('named_small_strict_gpu')
         second, second_media = self.submit('same-settings-reupload', expected_source_sha256=digest(self.source))
         require(second['depth_cache']['state'] == 'hit', 'Same-settings reupload missed cache.')
         execution = second['execution']
-        require(execution.get('device') == 'cpu' and execution.get('active_provider') is None
-                and execution.get('gpu_verified') is False and execution.get('depth_cache_hit') is True
-                and execution.get('cached_execution', {}).get('active_provider') == 'DmlExecutionProvider',
-                f'Cached execution provenance is inaccurate: {execution}')
+        validate_execution(execution, self.args.execution_mode, cached=True)
         hardware_variation = (self.args.allow_hardware_encode_variation
                               and first.get('encoder') == second.get('encoder') == 'NVIDIA NVENC')
         comparison = compare_repeat_media(self.args.ffmpeg, first_media, second_media,
@@ -515,7 +537,7 @@ console.log(JSON.stringify({performed:true,widths,errors,default_cache_off:true,
         self.check('selected_cache_cleanup_preserves_unselected')
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--exe', type=Path, required=True)
     parser.add_argument('--data', type=Path, required=True, help='Fresh isolated LOCALAPPDATA root; never reused.')
@@ -523,6 +545,8 @@ def main():
     parser.add_argument('--models', type=Path, default=ROOT / '.runtime/models')
     parser.add_argument('--ffmpeg', type=Path, required=True)
     parser.add_argument('--expected-fingerprint')
+    parser.add_argument('--execution-mode', choices=('gpu', 'cuda'), default='gpu',
+                        help='Strict inference backend to verify: gpu requires DirectML; cuda requires CUDA.')
     parser.add_argument('--layout', choices=('SBS', 'XREAL_SBS'), default='SBS',
                         help='Packaged output layout to validate; XREAL_SBS is full 3840x1080 SBS.')
     parser.add_argument('--job-timeout', type=float, default=600)
@@ -533,13 +557,18 @@ def main():
     parser.add_argument('--node', type=Path)
     parser.add_argument('--playwright', type=Path)
     parser.add_argument('--chrome', type=Path, default=Path('C:/Program Files/Google/Chrome/Application/chrome.exe'))
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     for name in ('exe', 'data', 'report', 'models', 'ffmpeg', 'node', 'playwright', 'chrome'):
         value = getattr(args, name)
         if value is not None:
             setattr(args, name, value.resolve())
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {'schema_version': 1, 'started_at': utc(), 'passed': False, 'checks': {}, 'launches': [],
+              'execution_mode': args.execution_mode,
               'scope': f'Actual frozen EXE; generated one-second audio video; {args.layout} layout; pinned Small; isolated data; HTTP',
               'limitations': ['Synthetic media only; installed external FFmpeg required.',
                               'Restart uses forced exact owned process termination; no graceful shutdown claim.',

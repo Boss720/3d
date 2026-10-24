@@ -54,10 +54,14 @@ from stereo import StereoRenderer, TemporalDepthFilter, layout_size, refine_dept
 from video_encoder import select_encoder_profile
 from video_pipeline import PipelineCancelled, run_pipeline
 from video_depth import VideoDepthEstimator
+from depth_normalization import SceneDepthNormalizer
+from export_calibration import measure_exports
+from recovery_store import (RecoveryStore, RecoveryUnavailable, RecoveryConflict,
+                            RecoveryCapacityError, RecoverySourceError)
 from video_decoder import DecoderCancelled, open_video_capture
 from upload_admission import UploadAdmissionMiddleware
 from platform_paths import resolve_paths
-from media_process import external_process_environment, fps_passthrough_args
+from media_process import external_process_environment, fps_passthrough_args, probe_video, run_media_command
 
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -143,6 +147,7 @@ WORKER_STOP = threading.Event()
 ACCEPTING_MUTATIONS = True
 HISTORY: HistoryStore | None = None
 HISTORY_WARNING: str | None = None
+RECOVERY: RecoveryStore | None = None
 
 
 @dataclass
@@ -165,6 +170,16 @@ class Job:
     depth_interval: int = 1
     video_decode: str = 'software'
     use_depth_cache: bool = False
+    temporal_depth_scale: bool = False
+    renderer: str = 'fast'
+    calibration_budget_seconds: float = 60.0
+    calibration_report: dict[str, Any] | None = None
+    calibration_outputs: dict[str, Path] = field(default_factory=dict, repr=False)
+    calibration_owner: str | None = None
+    retain_source: bool = False
+    recovery_id: str | None = None
+    recovery_last_checkpoint: float = 0.0
+    recovery_warning: str | None = None
     depth_cache: dict[str, Any] = field(default_factory=lambda: {
         'state': 'disabled', 'frames': 0, 'bytes': 0, 'warning': None})
     decoder: dict[str, Any] = field(default_factory=dict)
@@ -280,12 +295,15 @@ class Job:
             "clip_start_seconds": self.clip_start_seconds if self.purpose == 'preview_clip' else None,
             "clip_duration_seconds": self.clip_duration_seconds if self.purpose == 'preview_clip' else None,
             "clip": self.clip,
+            "calibration_report": self.calibration_report,
             "state": self.state,
             "progress": self.progress,
             "message": self.message,
             "error": self.error,
             "history_warning": self.history_warning,
             "cleanup_warning": self.cleanup_warning,
+            "source_retained": bool(self.recovery_id and self.retain_source),
+            "recovery_warning": self.recovery_warning,
             "output_name": self.output_path.name if self.output_path else None,
             "created_at": self.created_at,
             "depth_mode": self.depth_mode,
@@ -326,7 +344,8 @@ def owned_upload_path(job: Job) -> Path | None:
     """Only the unique upload assigned by create_job belongs to this job."""
     path = job.input_path
     try:
-        if (path.parent.resolve() == UPLOADS.resolve() and path.stem == job.id
+        owner_id = job.recovery_id or job.id
+        if (path.parent.resolve() == UPLOADS.resolve() and path.stem == owner_id
                 and path.suffix in VIDEO_EXTENSIONS | IMAGE_EXTENSIONS and not path.is_symlink()):
             return path
     except OSError:
@@ -376,6 +395,8 @@ def safe_stem(filename: str) -> str:
 
 
 def output_path_for(job: Job) -> Path:
+    if job.purpose == 'calibration':
+        return OUTPUTS / f'calibration_{uuid.UUID(job.id).hex}.json'
     if job.purpose == 'export':
         return OUTPUTS / render_output_name(job.output_name_template, job.filename, job.layout,
                                             job.depth_mode, job.created_at, job.id, job.media_type)
@@ -390,11 +411,30 @@ def output_path_for(job: Job) -> Path:
 
 
 def set_job(job_id: str, **changes: Any) -> None:
+    checkpoint = None
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         if job:
             for name, value in changes.items():
                 setattr(job, name, value)
+            if job.recovery_id and RECOVERY is not None:
+                now = time.monotonic()
+                terminal = job.state in {'completed', 'failed', 'canceled'}
+                if terminal or now - job.recovery_last_checkpoint >= 10 or changes.get('frames_processed', 0) - getattr(job, '_recovery_frame_checkpoint', 0) >= 120:
+                    job.recovery_last_checkpoint = now
+                    job._recovery_frame_checkpoint = job.frames_processed
+                    checkpoint = (job, job.state, job.frames_processed)
+            if job.calibration_owner and 'process' in changes:
+                owner = JOBS.get(job.calibration_owner)
+                if owner:
+                    owner.process = changes['process']
+    if checkpoint:
+        recovery_job, state, frames = checkpoint
+        try:
+            RECOVERY.checkpoint(recovery_job.recovery_id, state, frames,
+                                claim_id=recovery_job.id if recovery_job.recovery_id != recovery_job.id else None)
+        except RecoveryUnavailable as exc:
+            recovery_job.recovery_warning = str(exc)[:240]
 
 
 def load_depth_model() -> cv2.dnn_Net:
@@ -564,7 +604,8 @@ def run_image(job: Job, net: cv2.dnn_Net | None) -> Path:
     if job.cancel_event.is_set():
         raise JobCancelled()
     with job.timings.measure("render"):
-        result = render_output(image, depth, job.strength, job.convergence, job.layout)
+        result = render_output(image, depth, job.strength, job.convergence, job.layout,
+                               **({'method': job.renderer} if job.renderer != 'fast' else {}))
     target = output_path_for(job)
     with job.timings.measure("encode_write"):
         if not cv2.imwrite(str(target), result, [cv2.IMWRITE_PNG_COMPRESSION, 3]):
@@ -670,7 +711,7 @@ class VideoDepthCacheSession:
                 decoder_identity={name: decoder.get(name) for name in
                                   ('backend', 'hardware', 'adapter_id', 'adapter_name')},
                 runtime_identity=runtime_identity,
-                pipeline_version=f'native-temporal-v1:{APP_BUILD_FINGERPRINT}')
+                pipeline_version=f'native-temporal-v2:{job.temporal_depth_scale}:{APP_BUILD_FINGERPRINT}')
             warning = None
             try:
                 self.reader = self.store.open_reader(self.key)
@@ -898,7 +939,8 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
     try:
         reader.start()
         depth_filter = TemporalDepthFilter(job.temporal_smoothing)
-        native_estimator = (VideoDepthEstimator(job.depth_interval, job.temporal_smoothing)
+        native_estimator = (VideoDepthEstimator(job.depth_interval, job.temporal_smoothing,
+                            normalizer=SceneDepthNormalizer() if job.temporal_depth_scale else None)
                             if job.depth_mode in NEURAL_MODES else None)
         renderer = StereoRenderer()
     except Exception as exc:
@@ -940,10 +982,12 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
         with job.timings.measure("depth"):
             if native_estimator is not None:
                 def predict_native(source_frame):
-                    result, info = DEPTH_ENGINE.predict_native_with_info(
+                    predict = (DEPTH_ENGINE.predict_raw_native_with_info if job.temporal_depth_scale
+                               else DEPTH_ENGINE.predict_native_with_info)
+                    result, info = predict(
                         source_frame, job.depth_mode, job.input_size, job.execution_mode)
                     EXECUTION_LOCAL.snapshot = info
-                    return 1.0 - result if job.invert_depth else result
+                    return (-(result) if job.temporal_depth_scale else 1.0 - result) if job.invert_depth else result
                 depth = native_estimator.process(frame, predict_native)
             else:
                 depth = estimate_depth(frame, job.depth_mode, net, job.input_size, job.invert_depth, job.execution_mode)
@@ -971,7 +1015,8 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
             if native_estimator is None:
                 depth = depth_filter.apply(frame, depth)
         with job.timings.measure("render"):
-            output_frame = renderer.render(frame, depth, job.strength, job.convergence, job.layout)
+            output_frame = renderer.render(frame, depth, job.strength, job.convergence, job.layout,
+                                           **({'method': job.renderer} if job.renderer != 'fast' else {}))
         if job.cancel_event.is_set():
             raise JobCancelled()
         if proc.stdin is None:
@@ -1087,6 +1132,70 @@ def run_video_capture(job: Job, net: cv2.dnn_Net | None, ffmpeg: str, source: Pa
             active_error.video_cleanup_error = str(cleanup_error)
 
 
+def run_export_calibration(job: Job, net, proxy_report) -> Path:
+    """One queued owner serializes actual sample exports and their validation."""
+    started = time.perf_counter()
+    identity = {'build_fingerprint': APP_BUILD_FINGERPRINT,
+                'source_sha256': hash_source(job.input_path, job.cancel_event),
+                'runtime': DEPTH_ENGINE.runtime_info(),
+                'sample': {'start_seconds': job.clip_start_seconds,
+                           'duration_seconds': job.clip_duration_seconds,
+                           'scope': 'bounded_proxy', 'proxy': proxy_report}}
+
+    def sample_export(settings, sample, cancel_event):
+        if cancel_event.is_set():
+            raise JobCancelled()
+        child_id = str(uuid.uuid4())
+        child = Job(id=child_id, filename=job.filename, input_path=job.input_path,
+                    media_type='video', purpose='calibration_sample',
+                    preview_source_path=job.preview_source_path,
+                    cancel_event=cancel_event, calibration_owner=job.id, **settings)
+        target = output_path_for(child)
+        owned = False
+        with JOBS_LOCK:
+            JOBS[child_id] = child
+        try:
+            with target.open('xb'):
+                pass
+            owned = True
+            set_job(job.id, phase='calibration', message=f"Measuring {sample['candidate_id']} · run {sample['repeat_index'] + 1}/2")
+            output = run_video(child, net)
+            metadata = probe_video(output, FFMPEG_PATH, cancel_event=cancel_event)
+            validation = run_media_command([FFMPEG_PATH, '-v', 'error', '-nostdin', '-i', str(output),
+                                            '-map', '0:v:0', '-f', 'null', '-'],
+                                           cancel_event=cancel_event, timeout=30)
+            if validation.returncode or not output.is_file() or output.stat().st_size == 0:
+                raise RuntimeError('A calibration output failed complete video decoding.')
+            # No output is advertised before finalization and full decode succeed.
+            key = f"{sample['candidate_id']}:{sample['repeat_index']}"
+            job.calibration_outputs[key] = output
+            execution = dict(child.execution)
+            execution['encoder'] = child.encoder
+            set_job(job.id, execution=dict(child.execution), encoder=child.encoder)
+            return {'completed': True, 'validated': True,
+                    'output': {'url': f"/api/calibration-exports/{job.id}/{sample['candidate_id']}/{sample['repeat_index']}",
+                               'bytes': output.stat().st_size}, 'execution': execution}
+        except BaseException:
+            if owned:
+                cleanup_job_file(job, target, 'calibration sample')
+            raise
+        finally:
+            with JOBS_LOCK:
+                JOBS.pop(child_id, None)
+                job.process = None
+
+    report = measure_exports(sample_export, identity, settings_snapshot(job),
+                             budget_seconds=job.calibration_budget_seconds,
+                             cancel_event=job.cancel_event, clock=time.perf_counter, started_at=started)
+    job.calibration_report = report
+    if job.cancel_event.is_set():
+        raise JobCancelled()
+    # The parent's downloadable artifact is the measured report, not an MP4.
+    target = output_path_for(job)
+    target.write_text(json.dumps(report, indent=2, allow_nan=False), encoding='utf-8')
+    return target
+
+
 def process_job(job_id: str) -> None:
     with JOBS_LOCK:
         job = JOBS.get(job_id)
@@ -1096,7 +1205,8 @@ def process_job(job_id: str) -> None:
         save_history_boundary(job, 'finish', 'canceled')
         set_job(job_id, state="canceled", phase="canceled", message="Canceled before processing",
                 processing_finished_monotonic=time.monotonic())
-        cleanup_job_file(job, job.input_path, 'upload')
+        if not job.retain_source:
+            cleanup_job_file(job, job.input_path, 'upload')
         return
 
     target = output_path_for(job)
@@ -1120,11 +1230,15 @@ def process_job(job_id: str) -> None:
             report = inspect_media(job.input_path, job.media_type, job.layout,
                                    job.resolution, OUTPUTS, FFMPEG_PATH, cancel_event=job.cancel_event)
             set_job(job.id, preflight=report)
-        if job.purpose == 'preview_clip':
+        if job.purpose in {'preview_clip', 'calibration'}:
             source_fps = report.get('fps') if not report.get('fps_provisional') else None
             source_frames = report.get('total_frames')
-            if source_fps and source_frames and job.clip_start_seconds >= source_frames / source_fps:
-                raise RuntimeError('Clip start is beyond the source duration. Choose an earlier timestamp.')
+            if source_fps and source_frames:
+                source_duration = source_frames / source_fps
+                if job.clip_start_seconds >= source_duration:
+                    raise RuntimeError('Clip start is beyond the source duration. Choose an earlier timestamp.')
+                if job.purpose == 'calibration' and job.clip_start_seconds + job.clip_duration_seconds > source_duration + 1.0 / source_fps:
+                    raise RuntimeError('The selected comparison interval would extend beyond the source. Choose an earlier timestamp or shorter sample.')
             if job.cancel_event.is_set():
                 raise JobCancelled()
             CLIP_PROXIES.mkdir(parents=True, exist_ok=True)
@@ -1158,7 +1272,10 @@ def process_job(job_id: str) -> None:
             if job.depth_mode in NEURAL_MODES:
                 DEPTH_ENGINE.validate(job.depth_mode, execution_mode=job.execution_mode)
             net = load_depth_model() if job.depth_mode == "precision" else None
-        target = run_image(job, net) if job.media_type == "image" else run_video(job, net)
+        if job.purpose == 'calibration':
+            target = run_export_calibration(job, net, job.clip['proxy'])
+        else:
+            target = run_image(job, net) if job.media_type == "image" else run_video(job, net)
         if job.cancel_event.is_set():
             raise JobCancelled()
         if (target != output_path_for(job) or target.is_symlink()
@@ -1170,7 +1287,8 @@ def process_job(job_id: str) -> None:
                               execution=job.execution, encoder=job.encoder, timings=job.timings.snapshot())
         set_job(job_id, state="completed", phase="complete", progress=100, output_path=target, process=None,
                 processing_finished_monotonic=time.monotonic(),
-                message="Processed clip ready" if job.purpose == 'preview_clip' else "Stereo export ready")
+                message=("Export comparison ready; review results before applying" if job.purpose == 'calibration'
+                         else "Processed clip ready" if job.purpose == 'preview_clip' else "Stereo export ready"))
     except (JobCancelled, ClipCancelled, DecoderCancelled):
         if target_owned:
             cleanup_job_file(job, target, 'partial output')
@@ -1190,7 +1308,8 @@ def process_job(job_id: str) -> None:
     finally:
         if job.preview_source_path:
             cleanup_job_file(job, job.preview_source_path, 'preview segment')
-        cleanup_job_file(job, job.input_path, 'upload')
+        if not job.retain_source:
+            cleanup_job_file(job, job.input_path, 'upload')
         with JOBS_LOCK:
             current = JOBS.get(job_id)
             if current:
@@ -1222,7 +1341,8 @@ def worker_loop() -> None:
                             processing_finished_monotonic=time.monotonic(), message='Conversion failed')
                 if job.preview_source_path:
                     cleanup_job_file(job, job.preview_source_path, 'preview segment')
-                cleanup_job_file(job, job.input_path, 'upload')
+                if not job.retain_source:
+                    cleanup_job_file(job, job.input_path, 'upload')
                 set_job(job_id, process=None)
         finally:
             JOB_QUEUE.task_done()
@@ -1282,12 +1402,19 @@ def require_history_admission() -> None:
 
 @asynccontextmanager
 async def application_lifespan(app):
-    global HISTORY, HISTORY_WARNING, ACCEPTING_MUTATIONS, WORKER
+    global HISTORY, HISTORY_WARNING, ACCEPTING_MUTATIONS, WORKER, RECOVERY
     # Configuration and lease acquisition precede worker creation or serving.
     history_root = PATHS.history_root if FROZEN and sys.platform.startswith("linux") else DATA_ROOT
     store = HistoryStore.from_environment(history_root, outputs_root=OUTPUTS)
     store.open()
     HISTORY, HISTORY_WARNING = store, None
+    recovery = RecoveryStore(RUNTIME / 'recovery', UPLOADS)
+    try:
+        recovery.open()
+        RECOVERY = recovery
+    except RecoveryUnavailable as exc:
+        RECOVERY = None
+        print(f'Source recovery unavailable: {exc}', flush=True)
     ACCEPTING_MUTATIONS = True
     WORKER_STOP.clear()
     JOB_QUEUE.set_paused(False)  # Scheduling pause is local to this server launch.
@@ -1313,6 +1440,9 @@ async def application_lifespan(app):
             # No timeout may release the lease beneath a live writer.
             await run_in_threadpool(worker.join)
         store.close()
+        if RECOVERY is not None:
+            RECOVERY.close()
+            RECOVERY = None
         HISTORY = None
         WORKER = None
         print('StereoLab shutdown complete.', flush=True)
@@ -1453,6 +1583,11 @@ def status() -> dict[str, Any]:
         "runtime": DEPTH_ENGINE.runtime_info(),
         "build_fingerprint": APP_BUILD_FINGERPRINT,
         "history_capabilities": history_capabilities(),
+        "recovery_capabilities": (RECOVERY.status() if RECOVERY is not None else {
+            'enabled': False, 'retained_jobs': 0, 'retained_bytes': 0, 'max_records': 32,
+            'max_bytes': 16 * 1024**3, 'resume_mid_video': False, 'restart_mode': 'full_source'}),
+        "export_calibration_capabilities": {"schema_version": 1, "supported": True,
+            "max_budget_seconds": 120, "scope": "bounded_proxy", "repeats": 2},
         "preview_capabilities": {
             "schema_version": 1,
             "processed_clip": {"supported": True, "max_duration_seconds": 5,
@@ -1466,6 +1601,79 @@ def status() -> dict[str, Any]:
                                 "max_template_length": MAX_TEMPLATE_LENGTH, "fields": list(NAMING_FIELDS),
                                 "unique_job_id_suffix": True},
     }
+
+
+@app.get('/api/recovery')
+def get_recovery() -> dict[str, Any]:
+    if RECOVERY is None or not RECOVERY.enabled:
+        return {'capabilities': {'enabled': False, 'retained_jobs': 0, 'retained_bytes': 0,
+                                 'max_records': 32, 'max_bytes': 16 * 1024**3,
+                                 'resume_mid_video': False, 'restart_mode': 'full_source'}, 'items': []}
+    return {'capabilities': RECOVERY.status(), 'items': RECOVERY.list()}
+
+
+@app.post('/api/recovery/{job_id}/restart')
+def restart_recovery(job_id: str) -> dict[str, Any]:
+    if RECOVERY is None or not RECOVERY.enabled:
+        raise HTTPException(status_code=503, detail='Source recovery is unavailable for this server session.')
+    try:
+        record = next((item for item in RECOVERY.list() if item['job_id'] == job_id), None)
+        if record is None:
+            raise RecoveryConflict('Retained source was not found.')
+        settings = validate_settings(record['settings'])
+        new_id = str(uuid.uuid4())
+        extension = Path(record['filename']).suffix.lower()
+        job = Job(id=new_id, filename=record['filename'], input_path=RECOVERY.source_path(job_id),
+                  media_type='image' if extension in IMAGE_EXTENSIONS else 'video',
+                  **settings,
+                  retain_source=True, recovery_id=job_id,
+                  output_name_template=record['output_name_template'])
+        # Hash potentially multi-gigabyte sources before taking queue locks so
+        # status, cancellation and new uploads remain responsive.
+        RECOVERY.claim(job_id, new_id)
+        registered = False
+        try:
+            with JOB_QUEUE.lock, JOBS_LOCK:
+                if not ACCEPTING_MUTATIONS:
+                    raise HTTPException(status_code=503, detail='StereoLab is shutting down.')
+                if JOB_QUEUE.qsize() + len(STAGED_UPLOADS) >= MAX_PENDING_JOBS:
+                    raise HTTPException(status_code=429, detail='The local queue is full. Wait for a slot, then retry the retained source.')
+                JOBS[new_id] = job
+                registered = True
+                JOB_QUEUE.put_nowait(new_id)
+        except BaseException:
+            if registered:
+                with JOBS_LOCK:
+                    JOBS.pop(new_id, None)
+            RECOVERY.release(job_id, new_id)
+            raise
+        ensure_worker()
+        with JOB_QUEUE.lock, JOBS_LOCK:
+            return public_job_locked(job)
+    except HTTPException:
+        raise
+    except RecoveryCapacityError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except RecoveryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RecoveryUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete('/api/recovery/{job_id}')
+def forget_recovery(job_id: str) -> dict[str, Any]:
+    if RECOVERY is None or not RECOVERY.enabled:
+        raise HTTPException(status_code=503, detail='Source recovery is unavailable for this server session.')
+    try:
+        forgotten = RECOVERY.forget(job_id)
+        return {'job_id': forgotten['job_id'], 'forgotten': True,
+                'source_file_retained': forgotten['source_present']}
+    except RecoveryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RecoveryUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get('/api/diagnostics/resources')
@@ -1489,6 +1697,13 @@ def protected_workspace_paths() -> set[Path]:
             protected.add(CLIP_PROXIES)  # Proxy creation can precede publication.
             if job.preview_source_path:
                 protected.add(job.preview_source_path)
+    if RECOVERY is not None and RECOVERY.enabled:
+        for record in RECOVERY.list():
+            try:
+                if record['source_present']:
+                    protected.add(RECOVERY.source_path(record['job_id']))
+            except RecoveryUnavailable:
+                continue
     return protected
 
 
@@ -1673,7 +1888,7 @@ def custom_model_digest(path: str, size: int, modified: int, created: int) -> st
         return digest.hexdigest()
 
 
-def process_preview(payload: bytes, mode: str, size: int, layout: str, strength: float, convergence: float, invert: bool, refinement: bool, execution_mode: str = "auto", preview_detail: str = "proxy") -> dict[str, Any]:
+def process_preview(payload: bytes, mode: str, size: int, layout: str, strength: float, convergence: float, invert: bool, refinement: bool, execution_mode: str = "auto", preview_detail: str = "proxy", renderer: str = 'fast') -> dict[str, Any]:
     started = time.perf_counter()
     validate_preview_detail(preview_detail)
     validate_preview_upload_size(len(payload))
@@ -1722,7 +1937,8 @@ def process_preview(payload: bytes, mode: str, size: int, layout: str, strength:
     if invert:
         depth = 1.0 - depth
     depth = refine_depth(frame, depth, refinement)
-    output = render_output(frame, depth, strength, convergence, layout)
+    output = render_output(frame, depth, strength, convergence, layout,
+                           **({'method': renderer} if renderer != 'fast' else {}))
     depth_image = render_output(frame, depth, strength, convergence, "DEPTH")
     return {"image": png_data_url(output), "depth": png_data_url(depth_image), "model": mode,
             "source": png_data_url(frame), "source_width": frame.shape[1], "source_height": frame.shape[0],
@@ -1739,17 +1955,20 @@ async def preview(
     layout: str = Form("SBS"), strength: float = Form(7.5), convergence: float = Form(0.5),
     invert_depth: bool = Form(False), edge_refinement: bool = Form(True),
     execution_mode: str = Form("auto"), preview_detail: str = Form("proxy"),
+    renderer: Annotated[str, Form()] = 'fast',
 ) -> dict[str, Any]:
     try:
         validate_preview_detail(preview_detail)
         validate_depth_mode(depth_mode, execution_mode)
+        if renderer not in {'fast', 'visibility'}:
+            raise HTTPException(status_code=400, detail='Choose fast or visibility rendering.')
         if layout not in LAYOUTS or not 0 <= strength <= 10 or not 0 <= convergence <= 1:
             raise HTTPException(status_code=400, detail="Invalid preview format, strength or convergence.")
         if input_size not in {256, 384, 518}:
             raise HTTPException(status_code=400, detail="Choose a supported model input size.")
         payload = await file.read(PREVIEW_UPLOAD_BYTES + 1)
         validate_preview_upload_size(len(payload))
-        return await run_in_threadpool(process_preview, payload, depth_mode, input_size, layout, strength, convergence, invert_depth, edge_refinement, execution_mode, preview_detail)
+        return await run_in_threadpool(process_preview, payload, depth_mode, input_size, layout, strength, convergence, invert_depth, edge_refinement, execution_mode, preview_detail, renderer)
     except HTTPException:
         raise
     except PreviewPolicyError as exc:
@@ -1894,11 +2113,18 @@ async def create_job(
     depth_interval: Annotated[int, Form()] = 1,
     video_decode: Annotated[str, Form()] = 'software',
     use_depth_cache: Annotated[bool, Form()] = False,
+    temporal_depth_scale: Annotated[bool, Form()] = False,
+    renderer: Annotated[str, Form()] = 'fast',
+    calibration_budget_seconds: Annotated[float, Form()] = 60.0,
+    retain_source: Annotated[bool, Form()] = False,
 ) -> dict[str, Any]:
     filename = Path((file.filename or "input").replace("\\", "/")).name
-    if type(depth_interval) is not int or depth_interval not in {1, 2}:
+    if type(depth_interval) is not int or depth_interval not in {0, 1, 2}:
         await file.close()
-        raise HTTPException(status_code=400, detail="Choose depth on every frame or alternate frames (1 or 2).")
+        raise HTTPException(status_code=400, detail="Choose adaptive (0), every frame (1) or alternate frames (2).")
+    if renderer not in {'fast', 'visibility'}:
+        await file.close()
+        raise HTTPException(status_code=400, detail='Choose fast or visibility rendering.')
     if video_decode not in {'software', 'amd'}:
         await file.close()
         raise HTTPException(status_code=400, detail="Choose software or AMD video decoding.")
@@ -1907,9 +2133,16 @@ async def create_job(
         # job metadata matches the software decoder that Linux will actually use.
         video_decode = 'software'
     extension = Path(filename).suffix.lower()
-    if purpose not in {'export', 'preview_clip'}:
+    if purpose not in {'export', 'preview_clip', 'calibration'}:
         await file.close()
-        raise HTTPException(status_code=400, detail='Choose export or preview_clip as job purpose.')
+        raise HTTPException(status_code=400, detail='Choose export, preview_clip or calibration as job purpose.')
+    if retain_source and (purpose != 'export' or RECOVERY is None or not RECOVERY.enabled):
+        await file.close()
+        raise HTTPException(status_code=503, detail='Opt-in source recovery is unavailable for this server session.')
+    if purpose == 'calibration' and (depth_mode not in NEURAL_MODES or
+            not math.isfinite(calibration_budget_seconds) or not 1 <= calibration_budget_seconds <= 120):
+        await file.close()
+        raise HTTPException(status_code=400, detail='Export calibration needs a named neural model and a budget from 1 to 120 seconds.')
     if expected_source_sha256 is not None and (
             purpose != 'export' or re.fullmatch(r'[0-9a-f]{64}', expected_source_sha256) is None):
         await file.close()
@@ -1928,7 +2161,7 @@ async def create_job(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     else:
         output_name_template = DEFAULT_OUTPUT_NAME_TEMPLATE
-    if purpose == 'preview_clip' and (extension not in VIDEO_EXTENSIONS
+    if purpose in {'preview_clip', 'calibration'} and (extension not in VIDEO_EXTENSIONS
             or not math.isfinite(clip_start_seconds) or clip_start_seconds < 0
             or not math.isfinite(clip_duration_seconds) or not 1 <= clip_duration_seconds <= 5):
         await file.close()
@@ -2018,11 +2251,17 @@ async def create_job(
             depth_interval=depth_interval,
             video_decode=video_decode,
             use_depth_cache=use_depth_cache,
+            temporal_depth_scale=temporal_depth_scale,
+            renderer=renderer,
+            calibration_budget_seconds=calibration_budget_seconds,
             purpose=purpose,
             clip_start_seconds=clip_start_seconds,
             clip_duration_seconds=clip_duration_seconds,
             output_name_template=output_name_template,
+            retain_source=retain_source,
+            recovery_id=job_id if retain_source else None,
         )
+        recovery_admitted = False
         try:
             with JOB_QUEUE.lock, JOBS_LOCK:
                 if not ACCEPTING_MUTATIONS:
@@ -2034,19 +2273,41 @@ async def create_job(
                                        output_name_template=job.output_name_template,
                                        build_fingerprint=APP_BUILD_FINGERPRINT))
                     job.history_admitted = True
+                if retain_source:
+                    RECOVERY.admit(job.id, job.filename, digest.hexdigest(), total,
+                                   settings_snapshot(job), job.output_name_template)
+                    recovery_admitted = True
                 JOBS[job_id] = job
                 JOB_QUEUE.put_nowait(job_id)
         except HistoryCapacityError as exc:
+            if recovery_admitted:
+                RECOVERY.forget(job_id)
             input_path.unlink(missing_ok=True)
             raise HTTPException(status_code=429, detail=str(exc)) from exc
         except HistoryUnavailable as exc:
+            if recovery_admitted:
+                RECOVERY.forget(job_id)
             input_path.unlink(missing_ok=True)
             history_failure()
             raise HTTPException(status_code=503, detail=HISTORY_WARNING) from exc
+        except RecoveryCapacityError as exc:
+            if recovery_admitted:
+                RECOVERY.forget(job_id)
+            input_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except RecoveryUnavailable as exc:
+            if recovery_admitted:
+                RECOVERY.forget(job_id)
+            input_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
+            if recovery_admitted:
+                RECOVERY.forget(job_id)
             input_path.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception:
+            if recovery_admitted:
+                RECOVERY.forget(job_id)
             input_path.unlink(missing_ok=True)
             raise
         ensure_worker()
@@ -2063,7 +2324,8 @@ def get_jobs() -> list[dict[str, Any]]:
     with JOB_QUEUE.lock, JOBS_LOCK:
         positions = {item.id: position for position, item in enumerate(pending_jobs_locked(), 1)}
         return [job.public(queue_position=positions.get(job.id))
-                for job in sorted(JOBS.values(), key=lambda item: item.created_at)]
+                for job in sorted(JOBS.values(), key=lambda item: item.created_at)
+                if job.purpose != 'calibration_sample']
 
 
 @app.post('/api/queue/reorder')
@@ -2139,7 +2401,7 @@ def remove_queued_job(job_id: str) -> dict[str, Any]:
     with JOB_QUEUE.lock, JOBS_LOCK:
         job = pending_export_locked(job_id)
         path = owned_upload_path(job)
-        if path is not None:
+        if path is not None and not job.retain_source:
             try:
                 path.unlink(missing_ok=True)
             except OSError as exc:
@@ -2150,6 +2412,9 @@ def remove_queued_job(job_id: str) -> dict[str, Any]:
         job.cancel_event.set()
         job.state, job.phase, job.message = 'canceled', 'canceled', 'Removed from the local queue'
         job.processing_finished_monotonic = time.monotonic()
+        if job.retain_source:
+            set_job(job.id, state='canceled', phase='canceled',
+                    processing_finished_monotonic=job.processing_finished_monotonic)
         return public_job_locked(job)
 
 
@@ -2168,7 +2433,8 @@ def cancel_job(job_id: str) -> dict[str, Any]:
             save_history_boundary(job, 'finish', 'canceled')
             set_job(job_id, state='canceled', phase='canceled', message='Canceled while queue paused',
                     processing_finished_monotonic=time.monotonic())
-            cleanup_job_file(job, job.input_path, 'upload')
+            if not job.retain_source:
+                cleanup_job_file(job, job.input_path, 'upload')
             return public_job_locked(job)
         proc = job.process
     stop_process(proc)
@@ -2227,6 +2493,18 @@ def preview_clip_video(job_id: str) -> FileResponse:
         output = job.output_path if job and job.purpose == 'preview_clip' and job.state == 'completed' else None
     if output is None or not output.is_file() or output.parent.resolve() != OUTPUTS.resolve():
         raise HTTPException(status_code=404, detail='Completed preview clip was not found.')
+    return FileResponse(output, media_type='video/mp4', filename=output.name, content_disposition_type='inline')
+
+
+@app.get('/api/calibration-exports/{job_id}/{candidate_id}/{repeat_index}')
+def calibration_export_video(job_id: str, candidate_id: str, repeat_index: int) -> FileResponse:
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        output = (job.calibration_outputs.get(f'{candidate_id}:{repeat_index}')
+                  if job and job.purpose == 'calibration' else None)
+    if (output is None or output.is_symlink() or not output.is_file()
+            or output.parent.resolve() != OUTPUTS.resolve()):
+        raise HTTPException(status_code=404, detail='Validated calibration sample was not found.')
     return FileResponse(output, media_type='video/mp4', filename=output.name, content_disposition_type='inline')
 
 

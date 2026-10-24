@@ -1,6 +1,6 @@
 ; Separate per-user CUDA edition. Keeps the DirectML edition independently installable.
 #ifndef AppVersion
-#define AppVersion "0.2.0-beta.5"
+#define AppVersion "0.2.0-beta.6"
 #endif
 #ifndef PackageDir
 #define PackageDir ".runtime\windows-cuda\dist\StereoLab"

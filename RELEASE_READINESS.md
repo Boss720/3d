@@ -1,5 +1,101 @@
 # Production release readiness
 
+## Beta.6 current-source repackaging — 24 October 2026
+
+The earlier 23 October beta.6 package fingerprint (`7f0e026d…`) no longer
+matched the current source tree. Both Windows editions have been rebuilt from
+the current source fingerprint
+`459dbc29681f15b5b264911e0b86494e10f53fea641faf9618143a23a2d27451` into fresh
+`.runtime/` paths, preserving the older candidate files.
+
+The repository test run on this source passed 774 tests, skipped 10, and passed
+530 subtests. The rebuilt DirectML edition passed strict packaged GPU acceptance;
+its installer passed from an isolated path with spaces, all 3 installed payload
+hashes matched, and uninstall removed the test installation and registration.
+The rebuilt CUDA installer also passed strict packaged CUDA acceptance from an
+isolated path with spaces; all 200 installed payload hashes matched, and
+uninstall removed the test installation and registration. Both were checked on
+the Windows 11 GTX 1650 Ti only.
+
+Current local artifacts:
+
+- DirectML EXE: `.runtime/windows-directml-2026-10-24/dist/StereoLab.exe`,
+  98,650,993 bytes, SHA-256
+  `278e0845f08270a6be96cb959d7fc1ae0b1f89b3a430f0823678feec5a57d162`.
+- DirectML installer:
+  `.runtime/windows-directml-2026-10-24/installer/StereoLab-0.2.0-beta.6-Setup.exe`,
+  99,844,534 bytes, SHA-256
+  `6824aa3e422cbd71f021725ffdddb2d12ea9e99672c62b37e38e3b18c183905f4`.
+- CUDA one-folder package: `.runtime/windows-cuda-2026-10-24/dist/StereoLab/`.
+  Its EXE is 8,703,055 bytes, SHA-256
+  `fcc7f13f014d1b836ec9f033068c98871dee610cd1aac688bbdf703381c07e0c`.
+- CUDA installer:
+  `.runtime/windows-cuda-2026-10-24/installer/StereoLab-CUDA-0.2.0-beta.6-Setup.exe`,
+  1,356,881,500 bytes, SHA-256
+  `f2f5ffc7a123f23e70631eff954fe14194663273d58c839f8f3aa4617888cd5b`.
+
+Packaged and installer acceptance reports are retained in the matching
+`.runtime/windows-directml-2026-10-24/` and
+`.runtime/windows-cuda-2026-10-24/` folders. The installer build wrote only to
+these new candidate paths. These are local candidates; no GitHub binary release
+was created or uploaded.
+
+---
+
+## Beta.6 Windows package candidate — 23 October 2026
+
+The reviewed beta.6 candidate is superseded. All five review findings are fixed:
+CUDA-visible ordinals and physical metadata are kept separate; cuDNN 9.10.2.21
+retains older architecture kernels and incompatible devices are excluded;
+fallback cooldowns belong to each provider; the DirectML installer uses the
+selected package's launcher; and Linux CUDA tests use explicit inventories.
+CUDA bundling also excludes pip's obsolete backup DLLs. The packaged verifier
+now checks either strict backend and handles a null Windows launcher path while
+retaining exact process path and creation-time checks.
+
+Final source gates passed with ResourceWarning promoted to error: CPU 709 tests,
+9 skipped; DirectML 709 tests, 5 skipped; CUDA depth engine 58 tests, no skips.
+PowerShell build/setup/launcher parsing and whitespace checks passed. Skips are
+recorded in `.runtime/beta6-fixes/`; they include Windows symlink/POSIX-path
+limitations and missing CPU-environment graph/parser dependencies.
+
+The rebuilt DirectML EXE and CUDA package each passed packaged acceptance on this
+Windows 11 GeForce GTX 1650 Ti system: strict named Small inference, 8-frame
+3840x1080 XREAL SBS video with audio, static/source identity, cache provenance,
+restart/history, reupload and save-copy checks. CUDA also passed with a restricted
+PATH. NVENC repeat comparisons used the explicit 60 dB per-frame bound while
+requiring exact audio, geometry, frame count, and timing.
+
+The DirectML installer passed isolated install/uninstall with all 3 installed
+payload hashes matching, including full acceptance from an installed path with
+spaces. The CUDA installer also passed: all 200 installed payload hashes matched,
+full installed acceptance passed from a path with spaces, and uninstall removed
+the program directory and registration. The final CUDA package has 200 files,
+2,953,915,619 bytes, and no pip backup paths. Its bundled cuDNN is 9.10.2.21.
+
+Current evidence is in `.runtime/windows-directml-beta6-fixed/`,
+`.runtime/windows-cuda-beta6-fixed2/`, and `.runtime/beta6-fixes/`.
+The corrected release assets and SHA256SUMS are in
+`.runtime/stereolab-release-candidate-0.2.0-beta.6-fixed/`.
+Both packages match source fingerprint
+`7f0e026d5add39c795f2049863d6286e5e63f6c06a492bebb9fb2ca2bb61680c`.
+The DirectML EXE SHA-256 is
+`50b7cf0f27c029a9a24cbd391f94cf9a15bd7428979f24a11d33f333939afba1`;
+its installer is
+`8a66cccb89f93c00ae685da7954a2c939069f7ae03ef422b8ef1cb5ee658d845`.
+The CUDA installer is 1,356,870,138 bytes with SHA-256
+`28b99b96fcdcc7226f1e21e89da80ae6a67a457134ce516c30666854a6aa6993`.
+
+This is same-host synthetic-media and one-GPU evidence. Other GPU models,
+physical multi-GPU/MIG hardware, native Linux CUDA, clean-machine installation,
+physical XREAL playback and screen-reader support remain unverified. See
+`RELEASE_DEPENDENCIES.md` for dependency and redistribution review limits.
+
+The release candidate is prepared locally. GitHub publication remains pending:
+the current `gh auth status` check reports invalid configured credentials.
+
+---
+
 ## Current beta.3 review — 22 October 2026
 
 The owner requested beta.3 after the calibration, media preflight and queue/UI findings were fixed. GitHub's latest published beta was `v0.2.0-beta.2` at review time. Beta publication does not establish production readiness.

@@ -26,7 +26,10 @@ hiddenimports += collect_submodules("uvicorn")
 
 cuda_bundle = os.environ.get("STEREOLAB_CUDA_BUNDLE") == "1"
 if cuda_bundle:
+    from importlib.metadata import version
     import onnxruntime as ort
+    if version('nvidia-cudnn-cu12') != '9.10.2.21':
+        raise RuntimeError('CUDA build requires nvidia-cudnn-cu12==9.10.2.21 to retain older GPU support. Run setup-cuda.ps1 first.')
     if "CUDAExecutionProvider" not in ort.get_available_providers():
         raise RuntimeError("CUDA build requires an ONNX Runtime environment with CUDAExecutionProvider.")
     cuda_provider_dll = [source for source, _ in binaries
@@ -40,6 +43,10 @@ if cuda_bundle:
         nvidia_root = packages_root / "nvidia"
         if nvidia_root.is_dir():
             for dll in nvidia_root.rglob("*.dll"):
+                # pip can retain ~in/~package directories after replacing a
+                # locked distribution. They contain obsolete runtime DLLs.
+                if any(part.startswith(('~', '.')) for part in dll.relative_to(nvidia_root).parts):
+                    continue
                 nvidia_dlls.append((dll, dll.relative_to(packages_root).parent))
     found_names = {dll.name.lower() for dll, _ in nvidia_dlls}
     required_prefixes = ("cublas64_", "cudart64_", "cudnn64_")

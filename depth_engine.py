@@ -32,6 +32,9 @@ from gpu_hardware import probe_cuda_devices, probe_hardware
 CPU_PROVIDER = 'CPUExecutionProvider'
 GPU_PROVIDER = 'DmlExecutionProvider'
 CUDA_PROVIDER = 'CUDAExecutionProvider'
+# The CUDA 12 ONNX Runtime Windows wheel starts at SM 5.2. cuDNN 9.10.2
+# retains Maxwell/Pascal/Volta kernels removed from newer cuDNN releases.
+CUDA_MIN_COMPUTE_CAPABILITY = (5, 2)
 EXECUTION_MODES = ('auto', 'cpu', 'gpu', 'cuda', 'hybrid')
 GPU_MAX_INPUT_DIMENSION = 924
 LARGE_4GB_GPU_MAX_INPUT_DIMENSION = 518
@@ -177,8 +180,14 @@ class ModelManager:
         windows = sys.platform == 'win32'
         hardware = probe_hardware() if windows else {'selected_adapter': None, 'adapters': [], 'error': None}
         cuda_hardware = probe_cuda_devices()
-        cuda_device = (next((item for item in cuda_hardware['devices'] if 'v100' in item['name'].lower()), None)
-                       or max(cuda_hardware['devices'], key=lambda item: item.get('memory_mb', 0), default=None))
+        # Select among CUDA-visible, compatible devices; the runtime supplies
+        # their ordinals independently of nvidia-smi's physical indices.
+        cuda_devices = [item for item in cuda_hardware['devices'] if self._cuda_device_supported(item)]
+        cuda_device = max(cuda_devices, key=lambda item: item.get('memory_mb', 0), default=None)
+        cuda_device_error = cuda_hardware['error']
+        if cuda_hardware['devices'] and not cuda_devices:
+            cuda_device_error = ('The CUDA build requires compute capability 5.2 or newer; no compatible visible GPU was found. '
+                                 'Use the DirectML edition for older DirectX 12 GPUs, or choose CPU.')
         adapter = hardware['selected_adapter']
         last = self.execution_info()
         capabilities = dict(RUNTIME_CAPABILITIES)
@@ -215,7 +224,7 @@ class ModelManager:
                     'gpu_name': adapter['name'] if adapter else None, 'gpu_device': copy.deepcopy(adapter),
                     'cuda_available': cuda_available, 'cuda_device': copy.deepcopy(cuda_device),
                     'cuda_devices': copy.deepcopy(cuda_hardware['devices']),
-                    'cuda_error': None if cuda_available else cuda_hardware['error'] or 'CUDAExecutionProvider is unavailable in this ONNX Runtime.',
+                    'cuda_error': None if cuda_available else cuda_device_error or 'CUDAExecutionProvider is unavailable in this ONNX Runtime.',
                     'gpu_error': gpu_error, 'adapters': copy.deepcopy(hardware['adapters']),
                     'last_execution': last,
                     'capabilities': capabilities, 'supported_execution_modes': supported_modes,
@@ -236,6 +245,13 @@ class ModelManager:
         """Snapshot of the most recent inference, including any CPU fallback reason."""
         with self._lock:
             return copy.deepcopy(self._last_execution)
+
+    @staticmethod
+    def _cuda_device_supported(adapter: dict[str, Any]) -> bool:
+        capability = adapter.get('compute_capability')
+        return (isinstance(capability, (list, tuple)) and len(capability) == 2
+                and all(type(value) is int and value >= 0 for value in capability)
+                and tuple(capability) >= CUDA_MIN_COMPUTE_CAPABILITY)
 
     @staticmethod
     def _is_nvidia_adapter(adapter: dict[str, Any] | None) -> bool:
@@ -543,7 +559,7 @@ class ModelManager:
             raise RuntimeError("Depth model input dimensions exceed the supported size.")
         return out_h, out_w
 
-    def _predict_with_session(self, session: Any, frame: np.ndarray, model_id: str, input_size: int, max_dimension: int | None = None, *, native: bool = False) -> np.ndarray:
+    def _predict_with_session(self, session: Any, frame: np.ndarray, model_id: str, input_size: int, max_dimension: int | None = None, *, native: bool = False, raw: bool = False) -> np.ndarray:
         height, width = frame.shape[:2]
         out_h, out_w = self._input_size(session, height, width, model_id, input_size, max_dimension)
         midas = model_id == "dpt-hybrid-midas"
@@ -567,6 +583,8 @@ class ModelManager:
         if prediction.ndim != 2 or not prediction.size or not np.isfinite(prediction).all():
             raise RuntimeError("Depth model must return one finite 2D depth map.")
         depth = prediction if native else cv2.resize(prediction, (width, height), interpolation=cv2.INTER_CUBIC)
+        if raw:
+            return np.array(depth, dtype=np.float32, copy=True, order='C')
         minimum, maximum = float(depth.min()), float(depth.max())
         # Both catalog families return relative inverse depth: high values are near.
         depth = (depth - minimum) / max(maximum - minimum, 1e-6)
@@ -576,21 +594,20 @@ class ModelManager:
         return self._predict(frame_bgr, model_id, input_size, execution_mode)
 
     def _predict(self, frame_bgr: np.ndarray, model_id: str, input_size: int,
-                 execution_mode: str, *, native: bool = False) -> np.ndarray:
+                 execution_mode: str, *, native: bool = False, raw: bool = False) -> np.ndarray:
         self.validate(model_id, execution_mode)
         if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3 or not frame_bgr.shape[0] or not frame_bgr.shape[1] or frame_bgr.dtype != np.uint8:
             raise ValueError("Depth inference needs a nonempty uint8 BGR image.")
         with self._inference_lock:
-            provider, adapter, reason = self._execution_plan(model_id, execution_mode, self.runtime_info())
-            gpu_key = self._gpu_failure_key(model_id, provider, adapter, input_size, frame_bgr)
+            runtime = self.runtime_info()
+            provider, adapter, reason = self._execution_plan(model_id, execution_mode, runtime)
+            attempts = [(provider, adapter)]
+            if execution_mode == 'auto' and provider in {GPU_PROVIDER, CUDA_PROVIDER}:
+                if provider == CUDA_PROVIDER and runtime.get('gpu_available'):
+                    attempts.append((GPU_PROVIDER, runtime.get('gpu_device')))
+                attempts.append((CPU_PROVIDER, None))
+            fallback_reasons = [reason] if reason else []
             self._prune_gpu_failures()
-            if provider in {GPU_PROVIDER, CUDA_PROVIDER} and execution_mode == 'auto' and gpu_key in self._gpu_failures:
-                reason = self._gpu_failures[gpu_key][1]
-                retry_runtime = self.runtime_info()
-                if provider == CUDA_PROVIDER and retry_runtime.get('gpu_available'):
-                    provider, adapter = GPU_PROVIDER, retry_runtime.get('gpu_device')
-                else:
-                    provider, adapter = CPU_PROVIDER, None
             with self._lock:
                 self._last_execution = {'requested_mode': execution_mode, 'model_id': model_id,
                                         'active_provider': None, 'device': None,
@@ -602,37 +619,37 @@ class ModelManager:
                                         'input_size_limit': None, 'inference_succeeded': False,
                                         'graph_optimization': None, 'output_width': None, 'output_height': None}
             try:
-                try:
-                    depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
-                except Exception as exc:
-                    if provider not in {GPU_PROVIDER, CUDA_PROVIDER}:
-                        raise
-                    reason = f'{provider} inference failed: {exc}'
-                    self._gpu_failures.pop(gpu_key, None)
-                    self._gpu_failures[gpu_key] = (time.monotonic() + GPU_FAILURE_COOLDOWN_SECONDS, reason)
-                    self._prune_gpu_failures()
-                    self._session = None
-                    self._session_key = None
-                    self._session_id = None
-                    with self._lock:
-                        self._last_execution['fallback_reason'] = reason
-                    if execution_mode in {'gpu', 'cuda', 'hybrid'}:
-                        raise RuntimeError(reason) from exc
-                    retry_runtime = self.runtime_info()
-                    if provider == CUDA_PROVIDER and retry_runtime.get('gpu_available'):
-                        provider, adapter = GPU_PROVIDER, retry_runtime.get('gpu_device')
-                        try:
-                            depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
-                        except Exception as dml_exc:
-                            reason += f'; DirectML fallback failed: {dml_exc}'
-                            provider, adapter = CPU_PROVIDER, None
-                            depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
-                    else:
-                        provider, adapter = CPU_PROVIDER, None
-                        depth = self._run(frame_bgr, model_id, input_size, provider, adapter, native=native)
-                if provider in {GPU_PROVIDER, CUDA_PROVIDER}:
-                    self._gpu_verified = True
-                    self._gpu_failures.pop(gpu_key, None)
+                for provider, adapter in attempts:
+                    gpu_key = self._gpu_failure_key(model_id, provider, adapter, input_size, frame_bgr)
+                    if execution_mode == 'auto' and gpu_key in self._gpu_failures:
+                        fallback_reasons.append(self._gpu_failures[gpu_key][1])
+                        continue
+                    try:
+                        depth = self._run(frame_bgr, model_id, input_size, provider, adapter,
+                                          native=native, **({'raw': True} if raw else {}))
+                    except Exception as exc:
+                        if provider not in {GPU_PROVIDER, CUDA_PROVIDER}:
+                            raise
+                        reason = f'{provider} inference failed: {exc}'
+                        self._gpu_failures.pop(gpu_key, None)
+                        self._gpu_failures[gpu_key] = (time.monotonic() + GPU_FAILURE_COOLDOWN_SECONDS, reason)
+                        self._prune_gpu_failures()
+                        self._session = None
+                        self._session_key = None
+                        self._session_id = None
+                        fallback_reasons.append(reason)
+                        with self._lock:
+                            self._last_execution['fallback_reason'] = '; '.join(fallback_reasons)
+                        if execution_mode != 'auto':
+                            raise RuntimeError(reason) from exc
+                        continue
+                    if provider in {GPU_PROVIDER, CUDA_PROVIDER}:
+                        self._gpu_verified = True
+                        # Success belongs to this backend and adapter. Preserve
+                        # cooldowns for earlier failed fallback candidates.
+                        self._gpu_failures.pop(gpu_key, None)
+                    break
+                reason = '; '.join(fallback_reasons) or None
                 with self._lock:
                     self._last_execution.update({
                         'active_provider': provider, 'device': adapter['name'] if adapter else 'CPU',
@@ -662,6 +679,15 @@ class ModelManager:
             depth = self._predict(frame_bgr, model_id, input_size, execution_mode, native=True)
             return depth, self.execution_info()
 
+    def predict_raw_native_with_info(self, frame_bgr: np.ndarray, model_id: str, input_size: int = 518,
+                                     execution_mode: str = 'auto') -> tuple[np.ndarray, dict[str, Any]]:
+        """Unnormalized inverse depth for job-owned scene normalization only."""
+        with self._inference_lock:
+            depth = self._predict(frame_bgr, model_id, input_size, execution_mode, native=True, raw=True)
+            info = self.execution_info()
+            info['depth_scale'] = 'raw-relative-inverse'
+            return depth, info
+
     def _verify_installed(self, model_id: str) -> None:
         if self._hash(self._path(model_id)) != self._spec(model_id)['sha256']:
             self._quarantine(self._receipt(model_id))
@@ -679,7 +705,7 @@ class ModelManager:
         return self._gpu_graphs[model_id]
 
     def _run(self, frame: np.ndarray, model_id: str, input_size: int, provider: str,
-             adapter: dict[str, Any] | None, *, native: bool = False) -> np.ndarray:
+             adapter: dict[str, Any] | None, *, native: bool = False, raw: bool = False) -> np.ndarray:
         input_limit = self._gpu_input_limit(model_id, adapter) if adapter else None
         with self._lock:
             self._last_execution.update({'attempted_provider': provider, 'input_size_limit': input_limit,
@@ -743,7 +769,8 @@ class ModelManager:
             self._last_execution.update({'input_width': out_w, 'input_height': out_h})
         inference_started = time.perf_counter()
         try:
-            result = self._predict_with_session(self._session, frame, model_id, input_size, input_limit, native=native)
+            result = self._predict_with_session(self._session, frame, model_id, input_size, input_limit,
+                                                native=native, **({'raw': True} if raw else {}))
         finally:
             with self._lock:
                 self._last_execution['inference_pipeline_seconds'] = max(0.0, time.perf_counter() - inference_started)

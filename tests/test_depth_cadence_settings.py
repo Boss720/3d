@@ -28,7 +28,7 @@ class DepthCadenceSettingsTests(unittest.TestCase):
         self.assertEqual(validate_settings(settings), settings)
 
     def test_invalid_interval_is_not_silently_coerced(self):
-        for interval in (0, 3, True, 1.5, '2', None):
+        for interval in (-1, 3, True, 1.5, '2', None):
             with self.subTest(interval=interval), self.assertRaises(ValueError):
                 validate_settings({**self.settings(), 'depth_interval': interval})
 

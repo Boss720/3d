@@ -337,17 +337,131 @@ class EngineTest(unittest.TestCase):
         self.assertFalse(runtime['capabilities']['named_models_directml'])
         self.assertEqual(runtime['supported_execution_modes'], ['auto', 'cpu'])
 
-    def test_linux_ignores_unqualified_gpu_providers_and_never_probes_windows_hardware(self):
+    def test_linux_ignores_gpu_providers_without_visible_cuda_devices(self):
         ort = SimpleNamespace(get_available_providers=lambda: ['CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider'], __version__='fake')
-        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', return_value=ort), patch('depth_engine.probe_hardware') as probe:
+        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', return_value=ort), \
+                patch('depth_engine.probe_hardware') as probe, \
+                patch('depth_engine.probe_cuda_devices', return_value={'devices': [], 'error': 'No visible CUDA devices.'}):
             runtime = ModelManager.runtime_info(self.manager)
-        probe.assert_not_called()
-        self.assertFalse(runtime['gpu_available'])
-        self.assertIsNone(runtime['gpu_device'])
-        self.assertEqual(self.manager._execution_plan(SMALL, 'auto', runtime)[0], 'CPUExecutionProvider')
-        for mode in ('gpu', 'hybrid'):
-            with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'Linux.*CPU.*Auto'):
-                self.manager._execution_plan(SMALL, mode, runtime)
+            probe.assert_not_called()
+            self.assertFalse(runtime['gpu_available'])
+            self.assertIsNone(runtime['gpu_device'])
+            self.assertEqual(runtime['supported_execution_modes'], ['auto', 'cpu'])
+            self.assertEqual(self.manager._execution_plan(SMALL, 'auto', runtime)[0], 'CPUExecutionProvider')
+            for mode in ('gpu', 'hybrid'):
+                with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'Linux.*CPU.*Auto'):
+                    self.manager._execution_plan(SMALL, mode, runtime)
+
+    def test_linux_cuda_uses_visible_ordinal_without_windows_hardware(self):
+        ort = SimpleNamespace(get_available_providers=lambda: ['CUDAExecutionProvider', 'CPUExecutionProvider'], __version__='fake')
+        device = {'id': 0, 'physical_index': 1, 'name': 'NVIDIA Tesla V100', 'memory_mb': 16384,
+                  'compute_capability': [7, 0]}
+        with patch('sys.platform', 'linux'), patch.object(self.manager, '_ort', return_value=ort), \
+                patch('depth_engine.probe_hardware') as probe, \
+                patch('depth_engine.probe_cuda_devices', return_value={'devices': [device], 'error': None}):
+            runtime = ModelManager.runtime_info(self.manager)
+            probe.assert_not_called()
+            self.assertFalse(runtime['gpu_available'])
+            self.assertTrue(runtime['cuda_available'])
+            self.assertEqual(runtime['cuda_device'], device)
+            for mode in ('auto', 'cuda', 'hybrid'):
+                self.assertEqual(self.manager._execution_plan(SMALL, mode, runtime), ('CUDAExecutionProvider', device, None))
+
+    def test_cuda_selects_largest_compatible_visible_device(self):
+        ort = SimpleNamespace(get_available_providers=lambda: ['CUDAExecutionProvider', 'CPUExecutionProvider'], __version__='fake')
+        devices = [
+            {'id': 0, 'name': 'Old Kepler', 'memory_mb': 24576, 'compute_capability': [3, 7]},
+            {'id': 1, 'name': 'Pascal', 'memory_mb': 8192, 'compute_capability': [6, 1]},
+            {'id': 2, 'name': 'V100', 'memory_mb': 16384, 'compute_capability': [7, 0]},
+        ]
+        with patch.object(self.manager, '_ort', return_value=ort), \
+                patch('depth_engine.probe_cuda_devices', return_value={'devices': devices, 'error': None}):
+            runtime = ModelManager.runtime_info(self.manager)
+        self.assertTrue(runtime['cuda_available'])
+        self.assertEqual(runtime['cuda_device'], devices[2])
+        self.assertEqual(runtime['cuda_devices'], devices)
+
+    def test_cuda_unsupported_or_unknown_capability_has_actionable_error(self):
+        ort = SimpleNamespace(get_available_providers=lambda: ['CUDAExecutionProvider', 'CPUExecutionProvider'], __version__='fake')
+        for capability in ([3, 7], [5, 0], None, ['invalid', 0]):
+            device = {'id': 0, 'name': 'Unsupported GPU', 'memory_mb': 24576, 'compute_capability': capability}
+            with self.subTest(capability=capability), patch.object(self.manager, '_ort', return_value=ort), \
+                    patch('depth_engine.probe_cuda_devices', return_value={'devices': [device], 'error': None}):
+                runtime = ModelManager.runtime_info(self.manager)
+            self.assertFalse(runtime['cuda_available'])
+            self.assertIsNone(runtime['cuda_device'])
+            self.assertIn('DirectML', runtime['cuda_error'])
+            with self.assertRaisesRegex(RuntimeError, 'compute capability'):
+                self.manager._execution_plan(SMALL, 'cuda', runtime)
+
+    def test_cuda_fallback_preserves_each_failed_provider_cooldown(self):
+        self.accepted(SMALL)
+        runtime = self.gpu_runtime()
+        runtime.update(cuda_available=True, cuda_device={'id': 0, 'name': 'NVIDIA CUDA', 'memory_mb': 4096})
+        frame = np.zeros((8, 8, 3), np.uint8)
+        calls = []
+        def run(frame, model, size, provider, adapter, **kwargs):
+            calls.append(provider)
+            if provider == 'CUDAExecutionProvider':
+                raise RuntimeError('CUDA initialization failed')
+            return np.zeros((8, 8), np.float32)
+        with patch('time.monotonic', return_value=100) as clock, \
+                patch.object(self.manager, 'runtime_info', return_value=runtime), \
+                patch.object(self.manager, '_run', side_effect=run):
+            self.manager.predict(frame, SMALL)
+            self.manager.predict(frame, SMALL)
+            self.assertEqual(calls, ['CUDAExecutionProvider', 'DmlExecutionProvider', 'DmlExecutionProvider'])
+            self.assertEqual(len(self.manager._gpu_failures), 1)
+            self.assertIn('CUDA initialization failed', self.manager.execution_info()['fallback_reason'])
+            self.assertEqual(self.manager.execution_info()['active_provider'], 'DmlExecutionProvider')
+            with self.assertRaisesRegex(RuntimeError, 'CUDA initialization failed'):
+                self.manager.predict(frame, SMALL, execution_mode='cuda')
+            self.assertEqual(calls.count('CUDAExecutionProvider'), 2)
+            clock.return_value = 160
+            self.manager.predict(frame, SMALL)
+            self.assertEqual(calls.count('CUDAExecutionProvider'), 3)
+
+    def test_cuda_and_directml_failures_are_both_suppressed_until_retry(self):
+        self.accepted(SMALL)
+        runtime = self.gpu_runtime()
+        runtime.update(cuda_available=True, cuda_device={'id': 0, 'name': 'NVIDIA CUDA', 'memory_mb': 4096})
+        calls = []
+        def run(frame, model, size, provider, adapter, **kwargs):
+            calls.append(provider)
+            if provider != 'CPUExecutionProvider':
+                raise RuntimeError(provider + ' unavailable')
+            return np.zeros((8, 8), np.float32)
+        with patch('time.monotonic', return_value=100), \
+                patch.object(self.manager, 'runtime_info', return_value=runtime), \
+                patch.object(self.manager, '_run', side_effect=run):
+            for _ in range(2):
+                self.manager.predict(np.zeros((8, 8, 3), np.uint8), SMALL)
+            self.assertEqual(calls, ['CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider', 'CPUExecutionProvider'])
+            self.assertEqual(len(self.manager._gpu_failures), 2)
+            self.assertIn('CUDAExecutionProvider', self.manager.execution_info()['fallback_reason'])
+            self.assertIn('DmlExecutionProvider', self.manager.execution_info()['fallback_reason'])
+            self.manager.reset_gpu_failures()
+            self.manager.predict(np.zeros((8, 8, 3), np.uint8), SMALL)
+            self.assertEqual(calls[-3:], ['CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider'])
+
+    def test_cuda_cooldown_preserves_working_directml_session(self):
+        self.accepted(SMALL)
+        runtime = self.gpu_runtime()
+        runtime.update(cuda_available=True, cuda_device={'id': 0, 'name': 'NVIDIA CUDA', 'memory_mb': 4096})
+        fallback = FakeSession(provider='DmlExecutionProvider')
+        def create(path, **options):
+            if options.get('provider') == 'CUDAExecutionProvider':
+                raise RuntimeError('CUDA driver initialization failed')
+            return fallback
+        with patch('time.monotonic', return_value=100), \
+                patch.object(self.manager, 'runtime_info', return_value=runtime), \
+                patch.object(self.manager, '_new_session', side_effect=create) as created:
+            frame = np.zeros((8, 8, 3), np.uint8)
+            self.manager.predict(frame, SMALL)
+            self.manager.predict(frame, SMALL)
+            self.assertEqual(created.call_count, 2)
+            self.assertIs(self.manager._session, fallback)
+            self.assertTrue(self.manager.execution_info()['session_reused'])
 
     def test_linux_auto_and_cpu_inference_use_only_cpu_without_graph_transforms(self):
         self.accepted(SMALL)

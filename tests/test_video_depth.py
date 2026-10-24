@@ -81,8 +81,8 @@ class VideoDepthTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'finite 2D'):
                     VideoDepthEstimator().process(self.frame, lambda _: depth)
 
-    def test_interval_is_strictly_one_or_two(self):
-        for invalid in [0, 3, True, 1.5, '2']:
+    def test_interval_is_strictly_supported_integer(self):
+        for invalid in [3, True, 1.5, '2']:
             with self.subTest(interval=invalid), self.assertRaises(ValueError):
                 VideoDepthEstimator(interval=invalid)
 

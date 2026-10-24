@@ -14,6 +14,7 @@ SOURCE_COMPONENTS = (
     'job_queue.py', 'job_settings.py', 'output_naming.py', 'job_history.py',
     'local_workspace.py', 'video_depth.py', 'video_decoder.py', 'onnx_optimization.py',
     'depth_cache.py', 'depth_cache_identity.py', 'build_identity.py', 'app_launcher.py',
+    'export_calibration.py', 'depth_normalization.py', 'recovery_store.py',
     'media_process.py', 'upload_admission.py', 'gpu_hardware.py', 'platform_paths.py',
 )
 MANIFEST_NAME = 'stereolab-build.json'

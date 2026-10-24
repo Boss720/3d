@@ -58,7 +58,7 @@ class NamingJobTests(unittest.TestCase):
         self.assertEqual(public['output_name_template'], '{name}_{layout}')
         self.assertEqual(public['planned_output_name'], expected)
         self.assertIsNone(public['output_name'])
-        self.assertEqual(len(public['settings']), 14)
+        self.assertEqual(len(public['settings']), 16)
         self.assertIs(public['settings']['use_depth_cache'], False)
         self.assertEqual(public['settings']['depth_interval'], 1)
         self.assertEqual(public['settings']['video_decode'], 'software')

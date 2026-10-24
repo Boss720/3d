@@ -141,7 +141,7 @@ assert.equal(contract.performancePreset('missing'), null);
 const settings = {
   layout: 'SBS', strength: 5.2, convergence: 0.48, depth_mode: 'depth-anything-v2-small',
   execution_mode: 'auto', input_size: 384, resolution: '1080p', quality: 'balanced',
-  temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false, depth_interval: 1, video_decode: "software", use_depth_cache: false
+  temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false, depth_interval: 1, video_decode: "software", use_depth_cache: false, temporal_depth_scale: false, renderer: "fast"
 };
 const exported = contract.exportUserPreset(settings);
 assert.deepEqual(exported, { schema_version: 1, settings });
@@ -185,7 +185,7 @@ const upgraded = contract.validateUserPreset({schema_version: 1, settings});
 assert.equal(upgraded.depth_interval, 1);
 const fp16Flow = {...upgraded, depth_mode: 'depth-anything-v2-small-fp16', depth_interval: 2};
 assert.deepEqual(contract.validateUserPreset(contract.exportUserPreset(fp16Flow)), fp16Flow);
-for (const depth_interval of [0, 3, true, '2', null]) {
+for (const depth_interval of [-1, 3, true, '2', null]) {
   assert.throws(() => contract.exportUserPreset({...upgraded, depth_interval}), /depth_interval/);
 }
 """)
@@ -358,7 +358,7 @@ const caps = { queue_capabilities: { schema_version: 1, reorder_queued_exports: 
 assert.deepEqual(contract.queueCapabilities(caps), caps.queue_capabilities);
 assert.equal(contract.queueCapabilities({}), null);
 assert.equal(contract.queueCapabilities({ queue_capabilities: { ...caps.queue_capabilities, settings_snapshot: false } }), null);
-const settings = { layout: 'SBS', strength: 5, convergence: 0.5, depth_mode: 'depth-anything-v2-small', execution_mode: 'auto', input_size: 256, resolution: '1080p', quality: 'balanced', temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false, depth_interval: 1, video_decode: "software", use_depth_cache: false };
+const settings = { layout: 'SBS', strength: 5, convergence: 0.5, depth_mode: 'depth-anything-v2-small', execution_mode: 'auto', input_size: 256, resolution: '1080p', quality: 'balanced', temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false, depth_interval: 1, video_decode: "software", use_depth_cache: false, temporal_depth_scale: false, renderer: "fast" };
 const job = { settings_schema_version: 1, settings, source_available: true, queue_position: 2 };
 assert.deepEqual(contract.validateQueueJobSnapshot(job), { settings, sourceAvailable: true, queuePosition: 2 });
 assert.deepEqual(contract.validateQueueJobSnapshot({ ...job, queue_position: null }).queuePosition, null);
@@ -408,7 +408,7 @@ for (const value of ['a\\u0085b', 'a\\u200Bb', 'a\\u202Eb', 'a\\uD800b']) assert
 
     def test_output_naming_job_snapshot_and_ready_item_freeze_retry_duplicate(self):
         self.run_contract("""
-const settings = { layout: 'SBS', strength: 5, convergence: 0.5, depth_mode: 'depth-anything-v2-small', execution_mode: 'auto', input_size: 256, resolution: '1080p', quality: 'balanced', temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false, depth_interval: 1, video_decode: "software", use_depth_cache: false };
+const settings = { layout: 'SBS', strength: 5, convergence: 0.5, depth_mode: 'depth-anything-v2-small', execution_mode: 'auto', input_size: 256, resolution: '1080p', quality: 'balanced', temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false, depth_interval: 1, video_decode: "software", use_depth_cache: false, temporal_depth_scale: false, renderer: "fast" };
 const job = { naming_schema_version: 1, output_name_template: '{name}_{layout}_{date}', planned_output_name: 'scene_sbs_20261018_12345678-1234-1234-1234-123456789abc.png', output_name: null };
 assert.deepEqual(contract.validateQueueJobNaming(job), { outputNameTemplate: job.output_name_template, plannedOutputName: job.planned_output_name, outputName: null });
 assert.deepEqual(contract.validateQueueJobNaming({}), null);
@@ -516,7 +516,7 @@ assert.equal(contract.keyboardShortcutAction({ ...base, code: 'KeyP', target: { 
     def test_retry_or_duplicate_requires_browser_file_and_freezes_snapshot(self):
         self.run_contract("""
 const file = { name: 'scene.png' };
-const settings = { layout: 'SBS', strength: 5, convergence: 0.5, depth_mode: 'depth-anything-v2-small', execution_mode: 'auto', input_size: 256, resolution: '1080p', quality: 'balanced', temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false, depth_interval: 1, video_decode: "software", use_depth_cache: false };
+const settings = { layout: 'SBS', strength: 5, convergence: 0.5, depth_mode: 'depth-anything-v2-small', execution_mode: 'auto', input_size: 256, resolution: '1080p', quality: 'balanced', temporal_smoothing: 0.35, edge_refinement: true, invert_depth: false, depth_interval: 1, video_decode: "software", use_depth_cache: false, temporal_depth_scale: false, renderer: "fast" };
 const copy = contract.makeReadyQueueCopy({ file, name: file.name, size: 10, mediaType: 'image' }, settings);
 assert.equal(copy.file, file);
 assert.equal(copy.state, 'ready');
