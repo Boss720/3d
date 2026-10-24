@@ -1,4 +1,49 @@
-# StereoLab handoff — 21 October 2026
+# StereoLab handoff — 24 October 2026
+
+## Current beta.6 package checkpoint
+
+The current-source beta.6 source/build/test changes were committed as
+`2391cf590a3c397b4e9e88450d5169e781163cbc` and pushed to
+`origin/codex/linux-cpu-build`. The remote branch head was verified against this
+commit. The commit contains 44 source, build, release-documentation, and test
+files. `PROGRESS.md` and existing `output/` reports/assets were deliberately
+left local and uncommitted.
+
+Both Windows packages were rebuilt in fresh ignored directories from source
+fingerprint
+`459dbc29681f15b5b264911e0b86494e10f53fea641faf9618143a23a2d27451`:
+
+| Artifact | Local path | Bytes | SHA-256 |
+|---|---|---:|---|
+| DirectML EXE | `.runtime/windows-directml-2026-10-24/dist/StereoLab.exe` | 98,650,993 | `278e0845f08270a6be96cb959d7fc1ae0b1f89b3a430f0823678feec5a57d162` |
+| DirectML installer | `.runtime/windows-directml-2026-10-24/installer/StereoLab-0.2.0-beta.6-Setup.exe` | 99,844,534 | `6824aa3e422cbd71f021725ffdddb2d12ea9e99672c62b37e38e3b18c183905f4` |
+| CUDA EXE (one-folder package) | `.runtime/windows-cuda-2026-10-24/dist/StereoLab/StereoLab.exe` | 8,703,055 | `fcc7f13f014d1b836ec9f033068c98871dee610cd1aac688bbdf703381c07e0c` |
+| CUDA installer | `.runtime/windows-cuda-2026-10-24/installer/StereoLab-CUDA-0.2.0-beta.6-Setup.exe` | 1,356,881,500 | `f2f5ffc7a123f23e70631eff954fe14194663273d58c839f8f3aa4617888cd5b` |
+
+Current-source tests reported 774 passed, 10 skipped, and 530 subtests passed.
+The DirectML installer passed installed-path packaged acceptance, matched all
+3 payload hashes, and uninstalled cleanly. The CUDA installer passed strict
+CUDA packaged acceptance, matched all 200 payload hashes, and uninstalled
+cleanly. Both were verified on a Windows 11 GTX 1650 Ti; other GPUs and
+physical XREAL playback were not tested. Evidence is retained under each
+matching `.runtime/windows-*-2026-10-24/` directory.
+
+The source commit is pushed, but no GitHub release/tag or binary assets were
+published. `gh auth status` reports invalid CLI credentials; Git push succeeded
+through the configured Git transport. If binary publication is still wanted,
+reauthenticate GitHub CLI and create the beta.6 release from these verified
+local assets. Check dependency redistribution requirements before uploading the
+CUDA installer.
+
+The separate Phase 0 report is
+`output/reviews/stereolab-performance-baseline-2026-10-24.md`; it remains local.
+It recommends profiling full-resolution `refine_depth` first and records that
+the benchmark clips were synthetic. No Phase 1 performance optimization was
+implemented in this packaging pass.
+
+---
+
+## Earlier handoff — 21 October 2026
 
 ## Current beta.2 review checkpoint
 
